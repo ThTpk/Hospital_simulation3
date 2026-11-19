@@ -72,7 +72,7 @@ export async function runHospitalApp(opts = {}) {
   // ---------------------------------------------------------------- state
   let t = 7 * 60 + 40; // open on the morning crush, where the interesting answer lives
   let playing = true;
-  let speed = 2;
+  let speed = 1; // 4x — a minute of hospital every fifteen seconds, slow enough to watch one patient cross a room
   let cutaway = 'solid';
   let floorFilter = null;
   let explode = 1;
