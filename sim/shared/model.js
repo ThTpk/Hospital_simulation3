@@ -295,6 +295,27 @@ export function serviceTime(rand, mean, dist = 'lognorm') {
   return Math.exp(Math.log(mean) - s2 / 2 + Math.sqrt(s2) * normal(rand));
 }
 
+/**
+ * Share `total` places among pools in proportion to their size, as whole rooms, without losing or inventing any.
+ *
+ * Largest remainder, not rounding each pool on its own: rounding each of seven clinics separately turned a request
+ * for 16 consultation rooms into 18 open rooms, so closing three rooms barely moved the wait and the staffing
+ * slider was quietly lying about what it had done.
+ */
+export function apportion(total, weights) {
+  const sum = weights.reduce((a, b) => a + b, 0);
+  if (!sum || total <= 0) return weights.map(() => 0);
+  const exact = weights.map((w) => (w * total) / sum);
+  const out = exact.map(Math.floor);
+  let left = total - out.reduce((a, b) => a + b, 0);
+  const order = exact.map((v, i) => ({i, frac: v - Math.floor(v)})).sort((a, b) => b.frac - a.frac || weights[b.i] - weights[a.i]);
+  for (let j = 0; left > 0 && j < order.length * 2; j++) {
+    out[order[j % order.length].i]++;
+    left--;
+  }
+  return out;
+}
+
 const pickShare = (rand, list) => {
   let r = rand();
   for (const it of list) {
@@ -364,7 +385,8 @@ export function runDay(opts = {}) {
       maxWait: 0,
       hist: new Int32Array(61), // waiting-time histogram, 2-minute buckets, last bucket is 120+
       // per-clinic sub-pools for the consultation rooms
-      pools: d.byClinic ? Object.fromEntries(CLINIC_KEYS.map((c) => [c, {queue: [], inService: [], rooms: CLINICS[c].rooms}])) : null,
+      capAt: -1, // the staffing level the clinic apportionment below was worked out for
+      pools: d.byClinic ? Object.fromEntries(CLINIC_KEYS.map((c) => [c, {queue: [], inService: [], rooms: CLINICS[c].rooms, open: CLINICS[c].rooms}])) : null,
     };
   }
 
@@ -746,10 +768,15 @@ export function runDay(opts = {}) {
       const s = stations[k];
       const cap = staffedNow(s);
       if (s.pools) {
+        // how many of the unit's open rooms each clinic gets, re-apportioned only when the staffing level changes
+        if (s.capAt !== cap) {
+          s.capAt = cap;
+          const keys = Object.keys(s.pools);
+          const share = apportion(cap, keys.map((c) => s.pools[c].rooms));
+          keys.forEach((c, i) => (s.pools[c].open = share[i]));
+        }
         for (const pool of Object.values(s.pools)) {
-          // scale against the DEFAULT room count, not the configured one: against s.servers this ratio is always 1
-          // and the staffing slider would quietly do nothing
-          const roomCap = Math.max(0, Math.round(pool.rooms * (cap / s.def.c)));
+          const roomCap = pool.open ?? 0;
           while (pool.inService.length < roomCap && pool.queue.length) {
             const p = pool.queue.shift();
             pool.queue.forEach((x, i) => (x.qIdx = i));
