@@ -66,6 +66,18 @@ export const DIM = {
 };
 
 // ------------------------------------------------------------------------------------------------ materials
+/**
+ * The materials the cutaway modes act on: the walls, their inner faces, the skirting and the cubicle glass.
+ *
+ * Handed out by name rather than hunted for in the scene, because the instancing pass folds hundreds of wall
+ * meshes into a handful of InstancedMeshes and the only thing left that identifies a wall afterwards is which
+ * material it carries. Equipment painted the same white is a different material (paint: true), so it stays solid.
+ */
+export function wallMaterials() {
+  const M = mats();
+  return [M.wall, M.wallIn, M.base, M.glass, M.glassClear];
+}
+
 let MATS = null;
 function mats() {
   if (MATS) return MATS;

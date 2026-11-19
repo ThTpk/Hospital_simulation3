@@ -4,10 +4,19 @@
 // times, so the clock in the simulation and the distance covered in the 3D can never disagree: a patient who walks
 // 60 m takes longer than one who walks 9 m, in the numbers as well as on screen.
 //
-// Four floors, laid out as four plates in a 2x2 grid on the ground rather than stacked. An isometric camera cannot
-// see into a stacked building, and lifting floors apart vertically makes them overlap on screen. Unfolding them
-// side by side is honest (each plate is labelled) and every room stays visible. A lift transfer plays as the patient
-// stepping into the lift on one plate and out of the lift on another.
+// Four floors, STACKED — one building, drawn as an exploded axonometric: every floor sits directly above the one
+// below it and they are lifted apart so the camera can look into all four at once. Version 1 of this simulator did
+// the same with two floors and it is the view this version is built to match.
+//
+// The alternative, which version 2 shipped, was to unfold the floors into a 2x2 grid of plates on the ground. That
+// keeps every room visible from any angle, but it stops being a building: a hospital where the wards are a field
+// away from the theatres reads as four separate clinics, and the lift ride plays as a walk across a car park.
+// Stacking costs some occlusion — at a 30-degree camera a floor hides the back of the floor below it — which is
+// why picking a floor isolates it and drops the stack flat. `floorLift()` is the one place that geometry lives.
+//
+// Every plate therefore shares the same x/z origin and differs only in height. The walk graph is unchanged: node
+// ids are per plate, and a lift ride is still one edge priced at 18 m of walking per floor rather than the
+// distance between two plates that are only drawn apart.
 //
 // Rooms are never hand-placed. Each floor is a list of bands (the strips between corridors) and each band is a list
 // of rooms laid out left to right by `placeBand`, which throws if they do not fit. That way the plan cannot
@@ -22,13 +31,26 @@ export const PLATE_D = 60;
 
 /** Plate centres in world space. +x is east, +z is south (the main entrance faces +z). */
 export const PLATES = {
-  F1: {key: 'F1', floor: 1, x: -50, z: -36, name: 'Level 1', sub: 'Front office · Diagnostics · Emergency'},
-  F2: {key: 'F2', floor: 2, x: 50, z: -36, name: 'Level 2', sub: 'Specialty clinics · Dental · Physiotherapy'},
-  F3: {key: 'F3', floor: 3, x: -50, z: 36, name: 'Level 3', sub: 'Theatres · Recovery · Intensive care'},
-  F4: {key: 'F4', floor: 4, x: 50, z: 36, name: 'Level 4', sub: 'Inpatient wards'},
+  F1: {key: 'F1', floor: 1, x: 0, z: 0, name: 'ชั้น 1', sub: 'ส่วนหน้า · ตรวจวินิจฉัย · ฉุกเฉิน'},
+  F2: {key: 'F2', floor: 2, x: 0, z: 0, name: 'ชั้น 2', sub: 'คลินิกเฉพาะทาง · ทันตกรรม · กายภาพบำบัด'},
+  F3: {key: 'F3', floor: 3, x: 0, z: 0, name: 'ชั้น 3', sub: 'ห้องผ่าตัด · ห้องพักฟื้น · ICU'},
+  F4: {key: 'F4', floor: 4, x: 0, z: 0, name: 'ชั้น 4', sub: 'หอผู้ป่วยใน'},
 };
 export const PLATE_KEYS = ['F1', 'F2', 'F3', 'F4'];
 export const plateOf = (floor) => PLATES[`F${floor}`];
+
+/**
+ * How far apart the floors are drawn when the whole building is shown.
+ *
+ * Not the real 4.2 m floor-to-floor: at that spacing the camera sees the top floor and four slabs. 24 units is the
+ * smallest gap at which a 30-degree camera can still see most of the floor below, which is the same trade version 1
+ * made. `k` is the explode amount, animated 1 -> 0 when a single floor is isolated, so that isolating a floor drops
+ * the stack flat and the chosen floor lands at y = 0 where the camera already is.
+ */
+export const FLOOR_LIFT = 24;
+export const floorLift = (floor, k = 1) => (floor - 1) * FLOOR_LIFT * k;
+/** The lift a room, unit or path node sits at. */
+export const roomLift = (roomKey, k = 1) => floorLift(ROOMS[roomKey]?.floor ?? 1, k);
 
 // Bands run front (+z, the entrance side) to back (-z). The numbers are the same on every plate so the lift core
 // and the corridors line up when the plates are read side by side.
@@ -413,13 +435,14 @@ export function walkPath(fromKey, toKey, {clinicFrom = null, clinicTo = null} = 
   if (a && b) {
     const r = route(a, b);
     if (r) {
-      const pts = r.ids.map((id) => [NODES[id].x, 0, NODES[id].z]);
+      // a point carries its floor, because the floors are stacked: the renderer lifts each point to its own level
+      const pts = r.ids.map((id) => [NODES[id].x, 0, NODES[id].z, NODES[id].floor]);
       // start and end inside the room rather than in its doorway
       const insideOf = (key, clinic) => {
         const rk = ROOMS[key] ? key : unitAnchor(key, clinic);
         if (!rk) return null;
         const rr = ROOMS[rk];
-        return [rr.x, 0, rr.z - rr.d * 0.12];
+        return [rr.x, 0, rr.z - rr.d * 0.12, rr.floor];
       };
       const sIn = fromKey in GATES ? null : insideOf(fromKey, clinicFrom);
       const eIn = toKey in GATES ? null : insideOf(toKey, clinicTo);
@@ -486,11 +509,14 @@ export function pointAt(path, u) {
       x: a[0] + (b[0] - a[0]) * k,
       z: a[2] + (b[2] - a[2]) * k,
       rot: Math.atan2(b[0] - a[0], b[2] - a[2]),
+      // the walker belongs to the floor the segment STARTS on; the lift segment is where that flips, and they are
+      // hidden for the whole ride, so nobody is ever drawn sliding up the outside of the building
+      floor: a[3] ?? 1,
       hidden: false,
     };
   }
   const last = pts[pts.length - 1];
-  return {x: last[0], z: last[2], rot: 0, hidden: false};
+  return {x: last[0], z: last[2], rot: 0, floor: last[3] ?? 1, hidden: false};
 }
 
 /** True while a walk is inside the lift, so the renderer can hide the patient instead of flying them between plates. */
@@ -667,6 +693,15 @@ export function baySeats(bay) {
   return seats;
 }
 
+/**
+ * Which floor a unit happens on — the one number the renderer needs that the position helpers do not return.
+ * For the consultation rooms it depends on the clinic: medicine is on level 1, the specialty clinics on level 2.
+ */
+export function unitFloor(unitKey, clinic = null) {
+  const rk = unitAnchor(unitKey, clinic);
+  return ROOMS[rk]?.floor ?? STATIONS[unitKey]?.floor ?? 1;
+}
+
 /** Where somebody waiting for a result sits — a bench by the unit that ordered it. */
 export function resultPos(unitKey, idx) {
   const rk = unitAnchor(unitKey);
@@ -683,26 +718,38 @@ export function resultPos(unitKey, idx) {
 /** A camera that frames one unit's room: used by unit mode and by the process player. */
 export function roomCamera(roomKey) {
   const r = ROOMS[roomKey];
-  if (!r) return {x: 0, z: 0, d: 240, az: 38, el: 36};
+  if (!r) return {x: 0, z: 0, d: 240, az: 38, el: 36, floor: 1};
   const span = Math.max(r.w, r.d);
-  return {x: r.x, z: r.z + span * 0.1, d: Math.max(30, span * 2.1), az: 38, el: 40};
+  return {x: r.x, z: r.z + span * 0.1, d: Math.max(30, span * 2.1), az: 38, el: 40, floor: r.floor};
 }
 
-/** A camera that frames a whole plate. */
+/** A camera that frames a whole floor. */
 export function plateCamera(plateKey) {
   const p = PLATES[plateKey];
-  return {x: p.x, z: p.z, d: 150, az: 38, el: 42};
+  return {x: p.x, z: p.z, d: 150, az: 38, el: 42, floor: p.floor};
 }
 
-/** The whole hospital in one shot: the opening frame and what the home button gives back. */
-export const HOME_CAMERA = {x: 0, z: 0, d: 400, az: 38, el: 44};
+/**
+ * The whole building in one shot: the opening frame and what the home button gives back.
+ *
+ * `floor` is fractional on purpose — the camera aims at the middle of the stack rather than at any one floor — and
+ * the elevation is lower than version 2's 44 degrees because a stack has to be looked INTO, not down on.
+ */
+export const HOME_CAMERA = {x: 0, z: 2, d: 215, az: 38, el: 30, floor: 2.5};
+
+/** The three preset angles, in version 1's words. */
+export const CAMERA_PRESETS = {
+  overview: {...HOME_CAMERA},
+  top: {x: 0, z: 0, d: 190, az: 0, el: 72, floor: 2.5},
+  eye: {x: -6, z: 30, d: 34, az: 16, el: 7, floor: 1},
+};
 
 /** The ground extent, for the lot, the roads and the fence. */
 export const SITE = {
-  x0: PLATES.F1.x - PLATE_W / 2 - 22,
-  x1: PLATES.F2.x + PLATE_W / 2 + 22,
-  z0: PLATES.F1.z - PLATE_D / 2 - 22,
-  z1: PLATES.F3.z + PLATE_D / 2 + 22,
+  x0: -PLATE_W / 2 - 30,
+  x1: PLATE_W / 2 + 30,
+  z0: -PLATE_D / 2 - 30,
+  z1: PLATE_D / 2 + 34,
 };
 
 /** A sanity check the page runs at boot: no two rooms on a plate may overlap. */

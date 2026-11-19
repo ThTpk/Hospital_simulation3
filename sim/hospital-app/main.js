@@ -1,49 +1,49 @@
-// Meridian General — a hospital you can watch work, and then argue with.
+// จำลองการทำงานในโรงพยาบาล 3 มิติ — รุ่นที่ 3
 //
-// Four tabs over one model: the isometric simulator, the queue analysis, the service catalogue and the swimlanes.
-// All four read ONE config object and ONE recorded day, so a change made on any of them is a change to all of them.
-// See docs/SPEC.md for what is modelled and what is deliberately not.
+// รายละเอียดแบบจำลองมาจากรุ่นที่ 2 (Hospital_simulation2): 21 หน่วยบริการ · ชุดคำสั่งแบบความน่าจะเป็น ·
+// สิทธิการรักษา 5 แบบ · ระดับความรุนแรง ESI · เตียง · ลิฟต์ · เดินออกกลางคัน
+// ส่วนการทำงานและมุมมองมาจากรุ่นที่ 1 (Hospital_Workflow_3DSim): อาคารเดียวที่ตัดผ่าดูได้ ชั้นลอยแยกกัน
+// สไลเดอร์ปรับสด สถานการณ์สำเร็จรูป คลิกตัวผู้ป่วยแล้วตามดูเส้นทาง เทียบผลทั้งวัน และดาวน์โหลด CSV
+//
+// ลำดับความเป็นเจ้าของข้อมูลยังเหมือนเดิมทั้งสองรุ่น: model.js คือความจริง · layout.js คือพิกัด ·
+// ที่เหลือมีหน้าที่วาดสิ่งที่สองไฟล์นั้นบอก ไม่มีใครย้อนไปเขียนสถานะในโมเดล
 import {runHospitalApp} from '../shared/app.js';
-import {createShell} from '../shared/shell.js';
 
 const boot = document.createElement('div');
 boot.id = 'boot';
-boot.innerHTML = '<div><b>Meridian General</b><s>Simulating one working day…</s><i></i></div>';
+boot.innerHTML = '<div><b>กำลังเตรียมแบบจำลอง</b><s>สร้างอาคาร 4 ชั้นและจำลองการทำงานหนึ่งวัน…</s><i></i></div>';
 document.body.appendChild(boot);
 
 /**
- * The config every part of the product shares. `runDay` honours each key, the analysis page edits them in place,
- * and the shell re-runs the day when they change. There is no second copy anywhere.
+ * ค่าตั้งต้นที่ทุกส่วนใช้ร่วมกัน — สไลเดอร์และปุ่มสถานการณ์เขียนลงที่นี่ แล้วทั้งวันจะถูกจำลองใหม่
+ * ทุกคีย์ในนี้เป็นคีย์ที่ `runDay` รับอยู่แล้ว ไม่มีกลไกซ่อนอยู่นอกโมเดล
  */
 const cfg = {
   seed: 20261119,
-  servers: {}, // per unit: slots
-  svc: {}, // per unit: mean service time, minutes
-  dist: {}, // per unit: service-time distribution
-  scale: {}, // per arrival lane: volume multiplier
-  hourK: null, // 24 hourly multipliers
-  flatBooking: 0, // 0 = every appointment in the morning, 1 = spread across the session
+  servers: {}, // จำนวนจุดบริการรายหน่วย
+  svc: {}, // เวลาบริการเฉลี่ยรายหน่วย (นาที)
+  dist: {}, // การกระจายเวลาบริการรายหน่วย
+  scale: {}, // ตัวคูณจำนวนผู้ป่วยแต่ละช่องทาง
+  hourK: null, // น้ำหนักราย 24 ชั่วโมง
+  flatBooking: 0, // 0 = นัดทุกคนตอนเช้า · 1 = กระจายทั่ววัน
   orderK: 1,
-  orders: {}, // per test: how freely it is ordered
+  orders: {}, // ตัวคูณการสั่งตรวจแต่ละอย่าง
+  surge: null, // ช่วงที่ผู้ป่วยทะลักเข้ามา (ใช้โดยสถานการณ์อุบัติเหตุหมู่)
   breaks: true,
   balking: true,
-  profile: 'base',
+  scenario: 'normal',
 };
 
-const shell = createShell({cfg});
-
 runHospitalApp({cfg})
-  .then((sim) => {
-    shell.attach(sim);
-    // A timer, not requestAnimationFrame. Waiting for a real frame reads better, but a browser suspends rAF in a
-    // background tab — so anyone who opens this in a tab they are not looking at would come back to a loading card
-    // that never goes away, with the simulator running perfectly behind it.
+  .then(() => {
+    // ใช้ timer ไม่ใช่ requestAnimationFrame — ถ้าเปิดหน้านี้ค้างไว้ในแท็บพื้นหลัง เบราว์เซอร์จะระงับ rAF
+    // แล้วคนนั้นจะเห็นหน้าโหลดค้างตลอดไปทั้งที่แบบจำลองพร้อมแล้ว
     setTimeout(() => {
       boot.classList.add('gone');
       setTimeout(() => boot.remove(), 420);
-    }, 120);
+    }, 140);
   })
   .catch((e) => {
-    boot.innerHTML = `<div><b>The simulator failed to start</b><s>${String(e && e.message ? e.message : e)}</s></div>`;
+    boot.innerHTML = `<div><b>เริ่มแบบจำลองไม่สำเร็จ</b><s>${String(e && e.message ? e.message : e)}</s></div>`;
     throw e;
   });

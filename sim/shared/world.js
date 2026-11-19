@@ -12,7 +12,7 @@ import * as THREE from 'three';
 import {CLINICS, ST, STATIONS, STATION_KEYS} from './model.js';
 import {
   GATES, HOME_CAMERA, PLATES, PLATE_D, PLATE_KEYS, PLATE_W, ROOMS, SITE, UNIT_ROOMS, VERT_X, CORRIDORS_Z,
-  baySeats, inLift, pointAt, queuePos, resultPos, servicePos, slotRoom, staffPos, walkPath,
+  baySeats, floorLift, inLift, pointAt, queuePos, resultPos, servicePos, slotRoom, staffPos, unitFloor, walkPath,
 } from './layout.js';
 import {registerRoomPoints} from './layout.js';
 import {HOS, box, hosMat, labelTexture, signPanel} from './style.js';
@@ -299,6 +299,16 @@ export function createWorld({canvas, day: day0, detail = 'high'}) {
   const BAD = new Set(); // builders that have already failed, so one broken model warns once, not 200 times
   const pickables = {}; // room key -> Object3D, for clicking
   const anchors = {}; // unit key -> () => Vector3
+  const plateGroups = {}; // plate key -> Object3D, so the floors can be lifted apart and hidden one at a time
+
+  // ---- the view: one floor or the whole stack, and how far apart the stack is drawn
+  //
+  // `explode` is the only number that decides height anywhere in this file. At 1 the four floors stand 24 units
+  // apart and the camera looks into all of them; at 0 they sit on top of each other, which is what isolating a
+  // single floor animates towards — the chosen floor ends up at y = 0 and the others are hidden.
+  let floorFilter = null; // null = the whole building
+  let explode = 1;
+  const liftOf = (floor) => floorLift(floor, explode);
 
   // ---------------------------------------------------------------- ground
   if (RM.buildSiteGround) {
@@ -348,8 +358,9 @@ export function createWorld({canvas, day: day0, detail = 'high'}) {
   for (const pk of PLATE_KEYS) {
     const plate = PLATES[pk];
     const pg = new THREE.Group();
-    pg.position.set(plate.x, 0, plate.z);
+    pg.position.set(plate.x, floorLift(plate.floor, explode), plate.z);
     root.add(pg);
+    plateGroups[pk] = pg;
 
     if (RM.buildFloorPlate) pg.add(RM.buildFloorPlate({w: PLATE_W, d: PLATE_D, tint: HOS.floorA}).group);
 
@@ -358,7 +369,7 @@ export function createWorld({canvas, day: day0, detail = 'high'}) {
     // there are seven thousand of them. The shells, the beds and the people stay; the rest switches off.
     const detail = new THREE.Group();
     pg.add(detail);
-    detailLayers.push({plate: pk, group: detail, x: plate.x, z: plate.z});
+    detailLayers.push({plate: pk, group: detail, x: plate.x, z: plate.z, floor: plate.floor});
 
     // corridors: the cross corridors always, the vertical ones only where no room sits on them
     if (RM.buildCorridor) {
@@ -547,7 +558,7 @@ export function createWorld({canvas, day: day0, detail = 'high'}) {
     const rooms = UNIT_ROOMS[u];
     if (!rooms) continue;
     const r = ROOMS[rooms[0]];
-    anchors[u] = () => new THREE.Vector3(r.x, 2.6, r.z);
+    anchors[u] = () => new THREE.Vector3(r.x, 2.6 + liftOf(r.floor), r.z);
   }
 
   console.log(`world: ${Object.keys(ROOMS).length} rooms, ${baked} repeated meshes folded into instanced draws`);
@@ -624,25 +635,93 @@ export function createWorld({canvas, day: day0, detail = 'high'}) {
       const q = pointAt(path, u);
       // the walk phase is driven by DISTANCE covered, not by the clock, so the feet do not slide
       const phase = ((p.id * 0.137 + (u * path.metres) / WALK_STRIDE) % 1 + 1) % 1;
-      return {x: q.x, y: 0, z: q.z, rot: q.rot, pose: 1, phase, color: colorFor(p, s, t), step: s};
+      if (hiddenFloor(q.floor)) return {hidden: true};
+      return {x: q.x, y: liftOf(q.floor), z: q.z, rot: q.rot, pose: 1, phase, color: colorFor(p, s, t), step: s};
     }
     if (s.kind === ST.QUEUE) {
       const idx = Math.max(0, s.qIdx ?? 0);
       const g = queuePos(s.k, idx, s.clinic);
-      return {x: g.x, y: g.sitting ? SEAT_Y : 0, z: g.z, rot: g.rot, pose: g.sitting ? 2 : 0, color: colorFor(p, s, t), step: s};
+      const f = unitFloor(s.k, s.clinic);
+      if (hiddenFloor(f)) return {hidden: true};
+      return {x: g.x, y: (g.sitting ? SEAT_Y : 0) + liftOf(f), z: g.z, rot: g.rot, pose: g.sitting ? 2 : 0, color: colorFor(p, s, t), step: s};
     }
     if (s.kind === ST.RESULT) {
       const g = resultPos(s.k, (p.id * 7) % 20);
-      return {x: g.x, y: SEAT_Y, z: g.z, rot: g.rot, pose: 2, color: colorFor(p, s, t), step: s};
+      const f = unitFloor(s.k, s.clinic);
+      if (hiddenFloor(f)) return {hidden: true};
+      return {x: g.x, y: SEAT_Y + liftOf(f), z: g.z, rot: g.rot, pose: 2, color: colorFor(p, s, t), step: s};
     }
     const g = servicePos(s.k, s.slot ?? 0, s.clinic);
     const lying = !!g.bed || s.kind === ST.BED || !!STATIONS[s.k]?.bed;
-    return {x: g.x, y: lying ? DECK_Y : 0, z: g.z, rot: g.rot, pose: lying ? 3 : 0, color: colorFor(p, s, t), step: s};
+    const f = unitFloor(s.k, s.clinic);
+    if (hiddenFloor(f)) return {hidden: true};
+    return {x: g.x, y: (lying ? DECK_Y : 0) + liftOf(f), z: g.z, rot: g.rot, pose: lying ? 3 : 0, color: colorFor(p, s, t), step: s};
+  };
+
+  /** A person on a hidden floor is not drawn at all, rather than drawn floating where their floor used to be. */
+  const hiddenFloor = (floor) => floorFilter != null && floor !== floorFilter;
+
+  /**
+   * Show the whole stack, or one floor on its own.
+   *
+   * Called every frame with the animated explode amount, so switching floors is a movement rather than a cut: the
+   * stack closes up, the floors that are not wanted fade out of the draw entirely, and the one that is left ends
+   * up at ground level.
+   */
+  const setView = ({floor = floorFilter, explode: ex = explode} = {}) => {
+    floorFilter = floor;
+    explode = ex;
+    for (const pk of PLATE_KEYS) {
+      const pg = plateGroups[pk];
+      if (!pg) continue;
+      const f = PLATES[pk].floor;
+      pg.position.y = floorLift(f, explode);
+      pg.visible = !hiddenFloor(f);
+    }
+  };
+
+  // ---- the cutaway modes, in version 1's four positions
+  //
+  // Nothing here moves a mesh. The walls were folded into instanced draws by the baking pass, so the only handle
+  // left on them is the material they share — which is exactly the handle needed: one material edit changes every
+  // wall on every floor at once, and leaves the equipment painted the same white alone.
+  const WALLS = RM.wallMaterials ? RM.wallMaterials() : [];
+  const WALL_BASE = WALLS.map((m) => ({opacity: m.opacity, transparent: m.transparent, depthWrite: m.depthWrite}));
+  const sectionPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 10);
+  let cutaway = 'solid';
+
+  const setCutaway = (mode) => {
+    cutaway = mode;
+    WALLS.forEach((m, i) => {
+      const base = WALL_BASE[i];
+      if (mode === 'xray') {
+        m.transparent = true;
+        m.opacity = Math.min(base.opacity, 0.2);
+        m.depthWrite = false;
+        m.visible = true;
+      } else if (mode === 'nowalls') {
+        m.visible = false;
+      } else {
+        m.transparent = base.transparent;
+        m.opacity = base.opacity;
+        m.depthWrite = base.depthWrite;
+        m.visible = true;
+      }
+      m.needsUpdate = true;
+    });
+    st.renderer.clippingPlanes = mode === 'section' ? [sectionPlane] : [];
+  };
+
+  /** Where the section cut sits, as a fraction of the building's depth. */
+  const setSection = (u) => {
+    sectionPlane.constant = PLATE_D / 2 - PLATE_D * clamp(u);
   };
 
   // queue indices are not in the recording (a queue position changes as others are served), so rebuild them per
   // frame: everybody queueing at a unit, oldest first, is that unit's queue in order.
   const queueOrder = new Map();
+  const drawn = []; // {id, x, y, z} for everybody drawn as a patient this frame — what a click tests against
+  let drawnN = 0;
 
   let followId = null;
   let staffPose = [];
@@ -676,6 +755,7 @@ export function createWorld({canvas, day: day0, detail = 'high'}) {
 
     // second pass: place them
     let n = 0;
+    drawnN = 0;
     const perUnit = {};
     let heroInfo = null;
     for (const pi of live) {
@@ -697,6 +777,12 @@ export function createWorld({canvas, day: day0, detail = 'high'}) {
         heroInfo = {...g, patient: p, step: s, u: at.u};
         continue; // drawn as a posable figure instead
       }
+      const slot = drawn[drawnN] || (drawn[drawnN] = {id: 0, x: 0, y: 0, z: 0});
+      slot.id = p.id;
+      slot.x = g.x;
+      slot.y = (g.y ?? 0) + 0.9;
+      slot.z = g.z;
+      drawnN++;
       crowd.set(n++, {x: g.x, y: g.y ?? 0, z: g.z, rot: g.rot, color: g.color, pose: g.pose, phase: g.phase ?? (p.id % 97) / 97});
     }
 
@@ -710,10 +796,12 @@ export function createWorld({canvas, day: day0, detail = 'high'}) {
       const show = Math.min(staffed, Math.max(busy, Math.round(staffed * 0.75)));
       for (let i = 0; i < show && n < CROWD_MAX; i++) {
         const clinic = u === 'DOC' ? Object.keys(CLINICS)[i % Object.keys(CLINICS).length] : null;
+        const sf = unitFloor(u, clinic);
+        if (hiddenFloor(sf)) continue;
         const sp = staffPos(u, i, clinic);
         const role = d.dept === 'front' || d.dept === 'money' ? (u === 'PHA' ? 'pharm' : 'admin') : u === 'DOC' || u === 'ER' || u === 'OR' ? 'doctor' : d.dept === 'diag' ? 'tech' : 'nurse';
         const col = {admin: HOS.uniAdmin, pharm: HOS.uniPharm, doctor: HOS.coatDoctor, tech: HOS.scrubTech, nurse: HOS.scrubNurse}[role];
-        crowd.set(n++, {x: sp.x, y: i % 4 === 3 ? SEAT_Y : 0, z: sp.z, rot: sp.rot, color: col, pose: i % 4 === 3 ? 2 : 0, phase: (i * 0.31) % 1});
+        crowd.set(n++, {x: sp.x, y: (i % 4 === 3 ? SEAT_Y : 0) + liftOf(sf), z: sp.z, rot: sp.rot, color: col, pose: i % 4 === 3 ? 2 : 0, phase: (i * 0.31) % 1});
       }
     }
 
@@ -723,8 +811,9 @@ export function createWorld({canvas, day: day0, detail = 'high'}) {
     // the followed patient
     if (heroInfo) {
       hero.group.visible = true;
-      hero.group.position.set(heroInfo.x, 0, heroInfo.z);
-      // a posable figure sits and lies about its own origin, so it needs no y offset — only the crowd does
+      // a posable figure sits and lies about its own origin, so it needs no y offset of its own — but it does need
+      // the height of the floor it is standing on, which liveAt() has already worked out
+      hero.group.position.set(heroInfo.x, heroInfo.y - (heroInfo.pose === 2 ? SEAT_Y : heroInfo.pose === 3 ? DECK_Y : 0), heroInfo.z);
       hero.group.rotation.y = heroInfo.rot || 0;
       const kind = heroInfo.pose === 1 ? 'walk' : heroInfo.pose === 2 ? 'sit' : heroInfo.pose === 3 ? 'lie' : 'stand';
       hero.pose(kind, 1, heroInfo.phase ?? 0);
@@ -732,7 +821,7 @@ export function createWorld({canvas, day: day0, detail = 'high'}) {
       if (heroInfo.step.kind === ST.SERVICE && heroInfo.step.k) {
         const sp = staffPos(heroInfo.step.k, heroInfo.step.slot ?? 0, heroInfo.step.clinic);
         heroStaff.group.visible = true;
-        heroStaff.group.position.set(sp.x, 0, sp.z);
+        heroStaff.group.position.set(sp.x, liftOf(unitFloor(heroInfo.step.k, heroInfo.step.clinic)), sp.z);
         heroStaff.group.rotation.y = sp.rot;
         heroStaff.pose(heroInfo.step.k === 'DOC' ? 'lean' : 'stand', 1, 0);
       } else heroStaff.group.visible = false;
@@ -795,11 +884,11 @@ export function createWorld({canvas, day: day0, detail = 'high'}) {
    * Switch each level's furniture on only when the camera is near enough for it to mean anything.
    * Called once a frame from the app with the live camera.
    */
-  const setDetail = (camX, camZ, camD) => {
+  const setDetail = (camX, camY, camZ, camD) => {
     for (const L of detailLayers) {
-      const dist = Math.hypot(camX - L.x, camZ - L.z);
-      // near enough that the level fills a good part of the screen, and close enough to be the one being looked at
-      L.group.visible = camD < 115 && dist < 110;
+      const dist = Math.hypot(camX - L.x, camY - liftOf(L.floor), camZ - L.z);
+      // near enough that the floor fills a good part of the screen, and close enough to be the one being looked at
+      L.group.visible = camD < 115 && dist < 70;
     }
   };
 
@@ -816,6 +905,18 @@ export function createWorld({canvas, day: day0, detail = 'high'}) {
     setDetail,
     setFollow: (id) => {
       followId = id;
+    },
+    /** Everybody drawn as a patient in the last frame, at head height — for picking one with a click. */
+    drawnPeople: () => drawn.slice(0, drawnN),
+    setView,
+    setCutaway,
+    setSection,
+    liftOf,
+    get cutaway() {
+      return cutaway;
+    },
+    get floorFilter() {
+      return floorFilter;
     },
     /** Replace the recorded day and re-index it. The building, the furniture and the crowd are reused as they are. */
     setDay: (d) => {

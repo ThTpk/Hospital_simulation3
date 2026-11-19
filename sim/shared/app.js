@@ -1,76 +1,60 @@
-// The app: three ways to watch one hospital.
+// The app — version 1's way of working, over version 2's hospital.
 //
-//   Whole hospital  the four levels side by side, the clock running, the busiest unit flagged
-//   By unit         pick a unit and watch that unit work — its own room, its own staff, its own queue
-//   By process      pick a patient journey and play it one unit at a time, walking between them
+// What version 1 (Hospital_Workflow_3DSim) let you do, and this file reproduces:
 //
-// The clock is the only thing that moves. `world.pose(t)` is a pure function of it, so the scrubber, the step rail
-// and the play button are all just different ways of setting t, and none of them can disagree with the panels.
+//   pick a unit          the camera flies to it, its floor is isolated, the charts follow it
+//   cut the building     ทึบ · X-ray · ไม่มีผนัง · ตัดขวาง (keys 1–4)
+//   pick a floor         one floor on its own, or the whole stack lifted apart
+//   camera presets       ภาพรวม · ผังจากบน · ระดับสายตา, and free orbit at any time
+//   time                 play/pause, 1×–120×, drag the bar back to the minute the queue broke
+//   live sliders         staffing, arrivals and referral rates — the whole day recomputes
+//   preset scenarios     วันปกติ · เช้าวันจันทร์ · อุบัติเหตุหมู่ · แพทย์ลา · กระจายนัด · ฤดูไข้หวัด
+//   click a patient      the camera follows them, their history opens, their whole route is drawn on the floor
+//   whole-day comparison against a baseline you set, and CSV of both the summary and the five-minute series
+//   leave it alone       after 25 seconds it tours itself, and the first touch hands control back
 //
-//   drag            pan          scroll/pinch  zoom        right-drag or shift-drag  swing the camera
-//   click a room    select it    Esc           deselect    space  play/pause
-//   1 2 3           switch mode  [ ]           step back and forward through a process
+// The one behavioural difference from version 1, and it is deliberate: version 1 simulated forward and a slider
+// changed the future only. This model records the whole day in one pass (~100 ms), so a slider re-records the whole
+// day and the clock stays where it was. That is why the comparison panel can be honest — the numbers it shows are
+// the whole day under the current settings, not the half of it that happened after you moved the slider.
 import * as THREE from 'three';
-import {CLINICS, DAY_END, DAY_START, PROCESSES, ST, STATIONS, STATION_KEYS, findJourney, hhmm, runDay} from './model.js';
-import {CLINIC_ROOM, HOME_CAMERA, PLATES, PLATE_KEYS, ROOMS, UNIT_ROOMS, plateCamera, roomCamera, walkPath, walkTime} from './layout.js';
+import {DAY_END, DAY_START, STATIONS, STATION_KEYS, hhmm, runDay} from './model.js';
+import {
+  CAMERA_PRESETS, CLINIC_ROOM, FLOOR_LIFT, HOME_CAMERA, PLATES, PLATE_KEYS, ROOMS, UNIT_ROOMS,
+  checkLayout, floorLift, plateCamera, roomCamera, unitFloor, walkPath, walkTime,
+} from './layout.js';
 import {HOS} from './style.js';
-import {createUI} from './ui.js';
+import {createHud} from './hud.js';
 import {createWorld} from './world.js';
 import {createSelection} from './select.js';
-import {thumb} from './thumbs.js';
-import * as EQ from './equip.js';
+import {SCENARIOS, applyScenario, matchesScenario, scenarioOf, sliderSpecs} from './scenarios.js';
+import {clinicTh, insTh, laneTh, unitTh} from './th.js';
 
 const D2R = Math.PI / 180;
 const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
-const FOV = 26;
-const MIN_D = 22;
-const MAX_D = 620;
-const MIN_EL = 18;
-const MAX_EL = 74;
+const FOV = 30;
+const MIN_D = 14;
+const MAX_D = 560;
+const MIN_EL = 4;
+const MAX_EL = 80;
 const PAN_SLOP = 6;
 const SPEEDS = [1, 4, 12, 40, 120]; // simulated minutes per real second
+const IDLE_BEFORE_TOUR = 25; // seconds untouched before the page starts touring itself
 
-const UNIT_THUMB = {
-  REG: () => EQ.buildRegDesk?.(),
-  INFO: () => EQ.buildQueueKiosk?.(),
-  TRI: () => EQ.buildBPMonitor?.(),
-  DOC: () => EQ.buildExamBed?.({head: 0.3}),
-  PRC: () => EQ.buildIVPole?.({bags: 2}),
-  DEN: () => EQ.buildDentalChair?.({light: 1, tray: true}),
-  PT: () => EQ.buildParallelBars?.(),
-  LAB: () => EQ.buildAnalyser?.({lights: true}),
-  XRY: () => EQ.buildXrayTable?.({tube: 1.6}),
-  CT: () => EQ.buildCTScanner?.({bed: 0.3, ring: 0}),
-  EKG: () => EQ.buildEKGCart?.(),
-  PHA: () => EQ.buildPharmShelf?.({bays: 4}),
-  CSH: () => EQ.buildCashierCounter?.({cardReader: true}),
-  ERT: () => EQ.buildRegDesk?.(),
-  ER: () => EQ.buildERBed?.({rails: true, head: 0.3}),
-  ANE: () => EQ.buildAnaesthesiaMachine?.(),
-  OR: () => EQ.buildORTable?.({tilt: 0}),
-  PACU: () => EQ.buildPACUBed?.(),
-  ADM: () => EQ.buildRegDesk?.(),
-  ICU: () => EQ.buildICUBed?.(),
-  WARD: () => EQ.buildWardBed?.({head: 0.2}),
-};
+/** Units that get a row in the list and a slider: everything the model queues for and the plan has a room for. */
+const LISTED = STATION_KEYS.filter((k) => UNIT_ROOMS[k] && k !== 'POR');
 
-/**
- * Run the simulator inside `#app`.
- *
- * `opts.cfg` is the one config object the whole product shares — the analysis tab edits it in place and calls the
- * returned `rerun()`. Without a cfg this still runs standalone, which is how the bench pages and the capture script
- * use it.
- */
 export async function runHospitalApp(opts = {}) {
   const root = document.documentElement;
-  root.dataset.theme = 'light';
-  document.title = 'Meridian General — Hospital Operations Simulator';
+  document.title = 'จำลองการทำงานในโรงพยาบาล 3 มิติ — รุ่นที่ 3';
   const app = document.getElementById('app');
   const canvas = document.createElement('canvas');
   canvas.id = 'gl';
   app.appendChild(canvas);
 
-  // the models print signs and numbers with Inter, so the fonts must be in before anything is built
+  const layoutErrs = checkLayout();
+  if (layoutErrs.length) console.warn('layout:', layoutErrs);
+
   await Promise.all([
     document.fonts.load('400 20px "JetBrains Mono"'),
     document.fonts.load('600 20px "Inter"'),
@@ -78,226 +62,396 @@ export async function runHospitalApp(opts = {}) {
   ]).catch(() => {});
 
   // ---------------------------------------------------------------- the day
-  const cfg = opts.cfg || {flatBooking: 0, servers: {}, svc: {}, dist: {}, scale: {}, orderK: 1, orders: {}};
+  const cfg = opts.cfg || {seed: 20261119, servers: {}, svc: {}, dist: {}, scale: {}, orders: {}, orderK: 1, flatBooking: 0, hourK: null, surge: null, breaks: true, balking: true, scenario: 'normal'};
   const seedOf = () => cfg.seed ?? 20261119;
   let day = runDay({seed: seedOf(), walkTime, cfg});
   const world = createWorld({canvas, day});
   const {st} = world;
-  const ui = createUI(app);
   const sel = createSelection(st.scene, st);
 
-  // ---------------------------------------------------------------- layout
-  const fit = () => {
-    // the stage is a true 1600 x 900 frame scaled to fit its box — the window when it runs alone, the tab when the
-    // shell is around it, which is why this measures the parent and not the viewport
-    const box = app.parentElement && app.parentElement !== document.body ? app.parentElement : null;
-    const w = box ? box.clientWidth : innerWidth;
-    const h = box ? box.clientHeight : innerHeight;
-    const k = Math.min(w / 1600, h / 900);
-    app.style.transform = `translate(-50%, -50%) scale(${k})`;
-  };
-  // ---- making it run on the graphics an office PC actually has
-  //
-  // Three things, in order of how much they cost on Intel integrated graphics:
-  //   the ambient-occlusion pass at full resolution, the 4096 shadow map re-rendered every frame, and the device
-  //   pixel ratio. The panels are DOM and stay sharp regardless, so the 3D renders at 1:1, the AO runs at half
-  //   resolution, and the shadows — which barely move, since the sun does not — refresh every third frame.
+  // ---------------------------------------------------------------- state
+  let t = 7 * 60 + 40; // open on the morning crush, where the interesting answer lives
+  let playing = true;
+  let speed = 2;
+  let cutaway = 'solid';
+  let floorFilter = null;
+  let explode = 1;
+  let explodeWant = 1;
+  let selUnit = null;
+  let selRoom = null;
+  let selT0 = -1;
+  let followId = null;
+  let tour = false;
+  let tourI = -1;
+  let tourT = 0;
+  let idleFor = 0;
+  let dragging = false;
+  let dragTimer = null;
+  const cam = {...HOME_CAMERA};
+  const camWant = {...HOME_CAMERA};
+  let manual = false;
+
+  // ------------------------------------------------------- canvas and sizing
   const PIXEL_RATIO = 1;
   st.renderer.shadowMap.autoUpdate = false;
   st.sun.shadow.mapSize.set(2048, 2048);
   let frameNo = 0;
   const resize = () => {
-    fit();
-    st.resize(1600, 900, PIXEL_RATIO);
+    const w = Math.max(320, app.clientWidth || innerWidth);
+    const h = Math.max(240, app.clientHeight || innerHeight);
+    st.resize(w, h, PIXEL_RATIO);
     st.gtao.setSize(Math.max(2, Math.round(st.size.w / 2)), Math.max(2, Math.round(st.size.h / 2)));
   };
   addEventListener('resize', resize);
   resize();
 
-  // ---------------------------------------------------------------- state
-  let t = 7 * 60 + 40; // open on the morning crush, where the interesting answer lives
-  let playing = true;
-  let speed = 2; // index into SPEEDS
-  let mode = 'site';
-  let plate = 'F1';
-  let selUnit = null;
-  let selRoom = null;
-  let selT0 = -1;
-  let dropOpen = false;
-  let proc = null; // the chosen process
-  let journey = null; // the recorded patient who walked it
-  let stepIdx = 0;
-  const cam = {...HOME_CAMERA};
-  const camWant = {...HOME_CAMERA};
-  let manual = false;
-  const thumbCache = {};
+  // ----------------------------------------------------- the bottleneck ring
+  // Version 1 made the bottleneck room glow. The walls here are folded into instanced draws and cannot be
+  // recoloured one room at a time, so the room gets an outline of its own instead — same job, one draw call.
+  const ring = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
+    new THREE.LineBasicMaterial({color: HOS.rose, transparent: true, opacity: 0.9}),
+  );
+  ring.visible = false;
+  st.scene.add(ring);
+  const showRing = (roomKey) => {
+    const r = roomKey && ROOMS[roomKey];
+    ring.visible = !!r;
+    if (!r) return;
+    ring.scale.set(r.w, 2.9, r.d);
+    ring.position.set(r.x, 1.45 + world.liftOf(r.floor), r.z);
+  };
 
+  // --------------------------------------------------------------- handlers
   const glide = (to, hard = false) => {
     Object.assign(camWant, to);
     if (hard) Object.assign(cam, to);
+    manual = false;
   };
 
-  const unitThumb = (u) => {
-    if (thumbCache[u] !== undefined) return thumbCache[u];
-    let url = null;
-    try {
-      const b = UNIT_THUMB[u]?.();
-      if (b && b.group) url = thumb(b.group, {size: 150, az: 36, el: 24});
-    } catch (e) {
-      url = null;
+  const touch = () => {
+    idleFor = 0;
+    if (tour) {
+      tour = false;
+      hud.setTour(false);
     }
-    thumbCache[u] = url;
-    return url;
+  };
+
+  const setFloor = (f, {quiet = false} = {}) => {
+    floorFilter = f;
+    explodeWant = f == null ? 1 : 0;
+    hud.setFloorBtn(f);
+    if (!quiet && f != null) glide({...plateCamera(`F${f}`)});
+    if (!quiet && f == null) glide(CAMERA_PRESETS.overview);
   };
 
   const selectUnit = (u, {fly = true} = {}) => {
     selUnit = u;
     selRoom = u ? (UNIT_ROOMS[u] ? UNIT_ROOMS[u][0] : null) : null;
     selT0 = t;
-    if (u && fly) {
-      const r = ROOMS[selRoom];
-      if (r) {
-        plate = r.plate;
-        glide(roomCamera(selRoom));
-      }
+    followId = null;
+    if (u) {
+      // A floor hides the back of the floor below it, so focusing a unit isolates its floor — the same thing
+      // version 1 did for exactly the same reason.
+      setFloor(unitFloor(u), {quiet: true});
+      if (fly && selRoom) glide(roomCamera(selRoom));
+    } else {
+      setFloor(null, {quiet: true});
+      if (fly) glide(CAMERA_PRESETS.overview);
     }
+    hud.setFloorBtn(floorFilter);
   };
 
   const selectRoom = (rk) => {
     const r = ROOMS[rk];
     if (!r) return;
+    if (r.unit) {
+      selectUnit(r.unit);
+      selRoom = rk;
+      glide(roomCamera(rk));
+      return;
+    }
+    selUnit = null;
     selRoom = rk;
-    selUnit = r.unit || null;
     selT0 = t;
-    plate = r.plate;
+    setFloor(r.floor, {quiet: true});
     glide(roomCamera(rk));
   };
 
-  /** Pick a process: find a patient who really walked it, and follow them. */
-  const selectProcess = (key) => {
-    proc = PROCESSES.find((p) => p.key === key) || null;
-    journey = proc ? findJourney(day, proc) : null;
-    stepIdx = 0;
-    if (journey) {
-      world.setFollow(journey.patient.id);
-      t = journey.patient.tArrive + 0.1;
-      goStep(0, true);
-    } else world.setFollow(null);
-  };
-
-  /**
-   * The journey as the rail shows it: one tile per UNIT, with the queue in front of it and the wait for its result
-   * folded in, and a thin connector for each walk. A tile per recorded step would be twenty-odd tiles and would not
-   * fit on the screen — and "play it one unit at a time" is the thing being asked for, so the unit is the tile.
-   */
-  const journeySteps = () => {
-    if (!journey) return [];
-    const steps = journey.patient.steps;
-    const out = [];
-    let n = 0;
-    for (let i = 0; i < steps.length; i++) {
-      const s = steps[i];
-      if (s.kind === ST.WALK) {
-        const to = s.to in STATIONS ? STATIONS[s.to].name.replace(/ .*/, '') : 'the exit';
-        out.push({kind: 'walk', name: `to ${to}`, t0: s.t0, t1: s.t1 || s.t0, step: s, walk: true});
-        continue;
+  const follow = (id) => {
+    followId = id;
+    world.setFollow(id);
+    if (id != null) {
+      const p = day.patients.find((q) => q.id === id);
+      if (p) {
+        selUnit = null;
+        // being followed means being seen: show the floor they are on, whichever it is
+        const at = p.steps.find((s) => t >= s.t0 && t < (s.t1 || DAY_END));
+        const f = at && at.k ? unitFloor(at.k, at.clinic) : null;
+        if (f) setFloor(f, {quiet: true});
+        hud.setFloorBtn(floorFilter);
       }
-      if (s.kind !== ST.SERVICE && s.kind !== ST.BED) continue;
-      const prev = steps[i - 1];
-      const next = steps[i + 1];
-      const queued = prev && prev.kind === ST.QUEUE ? prev : null;
-      const result = next && next.kind === ST.RESULT ? next : null;
-      n++;
-      out.push({
-        kind: 'unit',
-        n,
-        key: s.k,
-        name: STATIONS[s.k]?.name || s.k,
-        t0: queued ? queued.t0 : s.t0, // the tile starts when the patient joins the queue, not when they are called
-        t1: result ? result.t1 || s.t1 : s.t1,
-        step: s,
-        wait: queued ? (queued.t1 || queued.t0) - queued.t0 : 0,
-        svc: (s.t1 || s.t0) - s.t0,
-        res: result ? (result.t1 || result.t0) - result.t0 : 0,
-      });
-    }
-    return out;
-  };
-
-  const goStep = (i, hard = false) => {
-    const steps = journeySteps();
-    if (!steps.length) return;
-    stepIdx = clamp(i, 0, steps.length - 1);
-    const s = steps[stepIdx];
-    t = s.t0 + 0.05;
-    const rk = s.step.k ? (s.step.k === 'DOC' && s.step.clinic ? CLINIC_ROOM[s.step.clinic] : UNIT_ROOMS[s.step.k]?.[0]) : null;
-    if (rk) {
-      plate = ROOMS[rk].plate;
-      glide(roomCamera(rk), hard);
-      selRoom = rk;
-      selUnit = s.step.k;
     }
   };
 
-  const takeOver = () => {
-    manual = true;
-  };
-
-  /**
-   * Run the day again on the edited config and hand the new recording to the 3D.
-   *
-   * The clock does not move and the camera does not move: the point of editing a parameter is to see what changed
-   * at the minute you were already looking at. The followed patient cannot survive a re-run — they were a patient
-   * of the old recording — so the process player picks whoever walked the same journey in the new one.
-   */
-  const rerunDay = () => {
+  /** Re-record the day on the edited config, keeping the clock and whoever is being followed if they still exist. */
+  const rerun = () => {
     day = runDay({seed: seedOf(), walkTime, cfg});
     world.setDay(day);
-    if (proc) {
-      journey = findJourney(day, proc);
-      world.setFollow(journey ? journey.patient.id : null);
-      if (journey) t = Math.max(t, journey.patient.tArrive + 0.1);
-    }
-    return day;
+    if (followId != null && !day.patients.some((p) => p.id === followId)) follow(null);
+    scheduleCompare();
   };
 
-  // ---------------------------------------------------------------- picking
+  const setScenario = (key) => {
+    applyScenario(cfg, key);
+    rerun();
+    hud.setScenario(key, scenarioOf(key).label);
+    hud.syncSliders();
+  };
+
+  const setCutaway = (mode) => {
+    cutaway = mode;
+    world.setCutaway(mode);
+    hud.setCutBtn(mode);
+  };
+
+  const seek = (minute) => {
+    t = clamp(minute, DAY_START, DAY_END - 0.5);
+    dragging = true;
+    clearTimeout(dragTimer);
+    dragTimer = setTimeout(() => (dragging = false), 350);
+  };
+
+  // --------------------------------------------------- whole-day comparison
   //
-  // Every room is an axis-aligned rectangle on a known plate, so a click is answered by unprojecting onto the
-  // ground and asking which rectangle holds that point. That is exact, costs one ray and 73 comparisons, and —
-  // unlike raycasting the meshes — it does not care that the furniture has been folded into instanced draws.
-  // It also picks a room by its floor, so clicking the gap between two beds still selects the ward.
+  // The baseline is a RECORDING, not a set of numbers: the whole day as it ran under the settings in force when the
+  // button was pressed. Comparing a recording with a recording on the same seed is the only way the difference can
+  // be attributed to the staffing rather than to the dice.
+  let baseline = {day, label: 'ค่าตั้งต้น'};
+  let compareTimer = null;
+  const summaryUnit = () => selUnit || 'DOC';
+
+  const compareRows = () => {
+    const a = baseline.day;
+    const b = day;
+    const u = summaryUnit();
+    const stuck = (d) => d.patients.filter((p) => !p.left).length;
+    const dir = (delta, goodIsDown = true) => (Math.abs(delta) < 0.05 ? 'same' : (delta < 0) === goodIsDown ? 'good' : 'bad');
+    const num = (v, digits = 0) => (Number.isFinite(v) ? v.toFixed(digits) : '—');
+    const row = (label, av, bv, {digits = 0, unit = '', goodIsDown = true} = {}) => ({
+      label,
+      base: `${num(av, digits)}${unit}`,
+      now: `${num(bv, digits)}${unit}`,
+      delta: `${bv - av > 0 ? '+' : ''}${num(bv - av, digits)}`,
+      dir: dir(bv - av, goodIsDown),
+    });
+    return [
+      {section: 'ทั้งโรงพยาบาล'},
+      row('กลับบ้านแล้ว', a.totals.left, b.totals.left, {goodIsDown: false}),
+      row('อยู่ใน รพ. เฉลี่ย', a.totals.losSum / Math.max(1, a.totals.losCount), b.totals.losSum / Math.max(1, b.totals.losCount), {unit: ' น.'}),
+      row('ค้างตอนปิดทำการ', stuck(a), stuck(b)),
+      row('เดินออกกลางคัน', a.totals.balked + a.totals.reneged, b.totals.balked + b.totals.reneged),
+      row('รับไว้นอน', a.totals.admitted, b.totals.admitted, {goodIsDown: false}),
+      {section: unitTh(u)},
+      row('รอเฉลี่ย', a.summary[u].waitMean, b.summary[u].waitMean, {digits: 1, unit: ' น.'}),
+      row('90% ไม่เกิน', a.summary[u].waitP90, b.summary[u].waitP90, {unit: ' น.'}),
+      row('คิวยาวสุด', a.summary[u].maxQueue, b.summary[u].maxQueue),
+      row('ให้บริการ', a.summary[u].served, b.summary[u].served, {goodIsDown: false}),
+      row('ใช้กำลังคน', a.summary[u].util * 100, b.summary[u].util * 100, {unit: '%', goodIsDown: false}),
+    ];
+  };
+
+  const scheduleCompare = () => {
+    clearTimeout(compareTimer);
+    hud?.setCompare(compareRows(), 'คำนวณ…');
+    compareTimer = setTimeout(() => hud.setCompare(compareRows(), ''), 30);
+  };
+
+  // --------------------------------------------------------------- CSV
+  const download = (name, text) => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob(['﻿' + text], {type: 'text/csv;charset=utf-8'}));
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  };
+  const csv = (kind) => {
+    const sc = scenarioOf(cfg.scenario || 'normal').label;
+    if (kind === 'summary') {
+      const head = ['unit', 'name', 'floor', 'slots', 'svc_min', 'served', 'util', 'wait_mean', 'wait_p50', 'wait_p90', 'wait_max', 'max_queue'];
+      const rows = STATION_KEYS.filter((k) => day.summary[k]).map((k) => {
+        const s = day.summary[k];
+        return [k, unitTh(k), STATIONS[k].floor, s.servers, s.svc, s.served, (s.util * 100).toFixed(1), s.waitMean.toFixed(2), s.waitP50, s.waitP90, s.waitMax.toFixed(1), s.maxQueue];
+      });
+      download(`hospital-summary-${sc}.csv`, [head, ...rows].map((r) => r.join(',')).join('\n'));
+      return;
+    }
+    const units = STATION_KEYS.filter((k) => day.summary[k]);
+    const head = ['minute', 'clock', 'in_system', ...units.flatMap((k) => [`q_${k}`, `svc_${k}`, `staffed_${k}`])];
+    const rows = day.history.map((h) => [
+      h.t.toFixed(0),
+      hhmm(h.t),
+      h.inSystem,
+      ...units.flatMap((k) => [h.stations[k]?.q ?? 0, h.stations[k]?.inSvc ?? 0, h.stations[k]?.staffed ?? 0]),
+    ]);
+    download(`hospital-series-${sc}.csv`, [head, ...rows].map((r) => r.join(',')).join('\n'));
+  };
+
+  // --------------------------------------------------------------- the HUD
+  const sliders = sliderSpecs();
+  const hud = createHud({
+    host: app,
+    cfg,
+    sliders,
+    floors: PLATE_KEYS.map((k) => PLATES[k]),
+    handlers: {
+      selectUnit: (u) => {
+        touch();
+        selectUnit(u === selUnit ? null : u);
+      },
+      selectPatient: (id) => {
+        touch();
+        follow(id);
+      },
+      setScenario: (k) => {
+        touch();
+        setScenario(k);
+      },
+      setCutaway: (m) => {
+        touch();
+        setCutaway(m);
+      },
+      setSection: (u) => {
+        touch();
+        world.setSection(u);
+      },
+      setFloor: (f) => {
+        touch();
+        selUnit = null;
+        selRoom = null;
+        setFloor(f);
+      },
+      setCamera: (name) => {
+        touch();
+        hud.setCamBtn(name);
+        const c = CAMERA_PRESETS[name];
+        if (!c) return;
+        if (floorFilter != null && name !== 'overview') glide({...c, floor: floorFilter});
+        else {
+          if (name === 'overview') setFloor(null, {quiet: true});
+          glide(c);
+        }
+      },
+      setSpeed: (i) => {
+        touch();
+        speed = i;
+        hud.setSpeedBtn(i);
+      },
+      togglePlay: () => {
+        touch();
+        playing = !playing;
+        hud.setPlaying(playing);
+      },
+      seek: (m) => {
+        touch();
+        seek(m);
+      },
+      setSlider: (i, v, commit) => {
+        touch();
+        sliders[i].set(cfg, v);
+        if (commit) {
+          cfg.scenario = SCENARIOS.find((s) => matchesScenario(cfg, s.key))?.key || null;
+          hud.setScenario(cfg.scenario, cfg.scenario ? scenarioOf(cfg.scenario).label : 'กำหนดเอง');
+          rerun();
+        }
+      },
+      setBaseline: () => {
+        touch();
+        baseline = {day, label: scenarioOf(cfg.scenario || 'normal').label};
+        scheduleCompare();
+      },
+      csv,
+    },
+  });
+  hud.setScenario(cfg.scenario || 'normal', scenarioOf(cfg.scenario || 'normal').label);
+  hud.setCutBtn('solid');
+  hud.setFloorBtn(null);
+  hud.setCamBtn('overview');
+  hud.setSpeedBtn(speed);
+  hud.setPlaying(true);
+  scheduleCompare();
+
+  // ------------------------------------------------------------- picking
+  //
+  // Version 1's order of precedence, kept: a click that lands on a patient follows that patient; otherwise a click
+  // that lands on a room selects that room; otherwise it clears the selection.
   const ray = new THREE.Raycaster();
   const ndc = new THREE.Vector2();
-  const ROOM_LIST = Object.values(ROOMS);
-  const pickAt = (cx, cy) => {
-    const g = groundAt(cx, cy);
-    if (!g) return null;
+  const GROUND = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  const gHit = new THREE.Vector3();
+
+  /** Where the ray meets one floor's slab. */
+  const planeAt = (cx, cy, y) => {
+    const r = canvas.getBoundingClientRect();
+    if (!r.width) return null;
+    ndc.set(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1);
+    ray.setFromCamera(ndc, st.camera);
+    GROUND.constant = -y;
+    if (!ray.ray.intersectPlane(GROUND, gHit)) return null;
+    return {x: gHit.x, z: gHit.z};
+  };
+
+  /**
+   * Which room a click landed on. The floors are stacked now, so the same x/z belongs to four rooms — the one
+   * that counts is the highest visible floor whose room actually contains the hit, because that is the one the
+   * ray reaches first on its way down.
+   */
+  const pickRoom = (cx, cy) => {
+    const floors = PLATE_KEYS.map((k) => PLATES[k].floor)
+      .filter((f) => floorFilter == null || f === floorFilter)
+      .sort((a, b) => b - a);
+    for (const f of floors) {
+      const g = planeAt(cx, cy, world.liftOf(f));
+      if (!g) continue;
+      let best = null;
+      let bestArea = Infinity;
+      for (const r of Object.values(ROOMS)) {
+        if (r.floor !== f) continue;
+        if (Math.abs(g.x - r.x) > r.w / 2 || Math.abs(g.z - r.z) > r.d / 2) continue;
+        const area = r.w * r.d;
+        if (area < bestArea) {
+          bestArea = area; // a small room inside a big one wins
+          best = r.key;
+        }
+      }
+      if (best) return best;
+    }
+    return null;
+  };
+
+  /** The patient nearest the click, in screen space, within a finger's width. */
+  const pickPatient = (cx, cy) => {
+    const r = canvas.getBoundingClientRect();
+    const sx = ((cx - r.left) / r.width) * st.size.w;
+    const sy = ((cy - r.top) / r.height) * st.size.h;
+    const lim = Math.max(14, st.size.w * 0.012);
     let best = null;
-    let bestArea = Infinity;
-    for (const r of ROOM_LIST) {
-      if (Math.abs(g.x - r.x) > r.w / 2 || Math.abs(g.z - r.z) > r.d / 2) continue;
-      const area = r.w * r.d;
-      if (area < bestArea) {
-        bestArea = area; // a small room inside a big one wins
-        best = r.key;
+    let bestD = lim * lim;
+    const v = new THREE.Vector3();
+    for (const p of world.drawnPeople()) {
+      v.set(p.x, p.y, p.z);
+      const q = st.project(v);
+      if (!q) continue;
+      const d = (q[0] - sx) ** 2 + (q[1] - sy) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = p.id;
       }
     }
     return best;
   };
 
   // ------------------------------------------------------------ camera input
-  const GROUND = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-  const gHit = new THREE.Vector3();
-  const groundAt = (cx, cy) => {
-    const r = canvas.getBoundingClientRect();
-    if (!r.width) return null;
-    ndc.set(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1);
-    ray.setFromCamera(ndc, st.camera);
-    if (!ray.ray.intersectPlane(GROUND, gHit)) return null;
-    if (Math.abs(gHit.x - cam.x) > 3000 || Math.abs(gHit.z - cam.z) > 3000) return null;
-    return {x: gHit.x, z: gHit.z};
-  };
   const pointers = new Map();
   let drag = null;
   let pinch = 0;
@@ -305,7 +459,7 @@ export async function runHospitalApp(opts = {}) {
   canvas.addEventListener('pointerdown', (e) => {
     canvas.setPointerCapture(e.pointerId);
     pointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
-    takeOver();
+    touch();
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];
       pinch = Math.hypot(a.x - b.x, a.y - b.y);
@@ -332,13 +486,13 @@ export async function runHospitalApp(opts = {}) {
     drag.cur.x = e.clientX;
     drag.cur.y = e.clientY;
     drag.far = Math.max(drag.far, Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0));
-    // a few pixels of wobble is still a click, so panning only starts once the pointer has really left the press —
-    // and it grabs the ground under the PRESS, so the drag tracks exactly instead of lagging by the first jump
     if (!drag.rotate && !drag.panning && drag.far > PAN_SLOP) {
       drag.panning = true;
-      drag.grab = groundAt(drag.x0, drag.y0);
+      manual = true;
+      drag.grab = planeAt(drag.x0, drag.y0, camTargetY());
     }
     if (drag.rotate) {
+      manual = true;
       const k = 1600 / canvas.getBoundingClientRect().width;
       camWant.az = cam.az = (cam.az - dx * k * 0.25) % 360;
       camWant.el = cam.el = clamp(cam.el + dy * k * 0.12, MIN_EL, MAX_EL);
@@ -354,12 +508,20 @@ export async function runHospitalApp(opts = {}) {
     }
     drag = null;
     if (was.rotate || was.panning) return;
-    const rk = pickAt(was.x0, was.y0);
-    if (rk) selectRoom(rk);
-    else {
-      selUnit = null;
-      selRoom = null;
+    const pid = pickPatient(was.x0, was.y0);
+    if (pid != null) {
+      follow(pid);
+      return;
     }
+    const rk = pickRoom(was.x0, was.y0);
+    if (rk) {
+      const r = ROOMS[rk];
+      if (r.unit && r.unit === selUnit) selectUnit(null);
+      else selectRoom(rk);
+      return;
+    }
+    follow(null);
+    selectUnit(null);
   };
   canvas.addEventListener('pointerup', endPointer);
   canvas.addEventListener('pointercancel', endPointer);
@@ -368,308 +530,194 @@ export async function runHospitalApp(opts = {}) {
     'wheel',
     (e) => {
       e.preventDefault();
-      takeOver();
+      touch();
+      manual = true;
       camWant.d = cam.d = clamp(cam.d * Math.exp(e.deltaY * 0.0012), MIN_D, MAX_D);
     },
     {passive: false},
   );
 
-  // ------------------------------------------------------------- UI controls
-  const wt = ui.els.wt;
-  for (const b of ui.els.modes) {
-    b.addEventListener('click', () => {
-      mode = b.dataset.mode;
-      if (mode === 'site') {
-        world.setFollow(null);
-        proc = null;
-        journey = null;
-        glide(HOME_CAMERA);
-      } else if (mode === 'unit') {
-        world.setFollow(null);
-        proc = null;
-        journey = null;
-        if (!selUnit) selectUnit('DOC');
-        else selectUnit(selUnit);
-      } else if (mode === 'process') {
-        selectProcess(proc?.key || PROCESSES[0].key);
-      }
-    });
-  }
-  ui.els.sw.addEventListener('click', () => {
-    dropOpen = !dropOpen;
-  });
-  ui.els.drop.addEventListener('click', (e) => {
-    const it = e.target.closest('[data-plate]');
-    if (!it) return;
-    plate = it.dataset.plate;
-    glide(plateCamera(plate));
-    dropOpen = false;
-  });
-  ui.els.units.addEventListener('click', (e) => {
-    const row = e.target.closest('[data-unit]');
-    if (!row) return;
-    mode = mode === 'process' ? 'unit' : mode;
-    selectUnit(row.dataset.unit);
-  });
-  ui.els.procs.addEventListener('click', (e) => {
-    const row = e.target.closest('[data-proc]');
-    if (!row) return;
-    selectProcess(row.dataset.proc);
-  });
-  ui.els.rail.addEventListener('click', (e) => {
-    const s = e.target.closest('[data-step]');
-    if (!s) return;
-    goStep(Number(s.dataset.step));
-  });
-  ui.els.det.addEventListener('click', (e) => {
-    const b = e.target.closest('[data-btn]');
-    if (!b) return;
-    if (b.dataset.btn === 'focus' && selRoom) glide(roomCamera(selRoom));
-    if (b.dataset.btn === 'close') {
-      selUnit = null;
-      selRoom = null;
-    }
-    if (b.dataset.btn === 'home') glide(HOME_CAMERA);
-  });
-  ui.els.follow.addEventListener('click', (e) => {
-    if (e.target.closest('[data-btn="unfollow"]')) {
-      world.setFollow(null);
-      journey = null;
-      proc = null;
-      mode = 'site';
-      glide(HOME_CAMERA);
-    }
-  });
-
-  // ------------------------------------------------------------- the scrubber
-  const bar = document.createElement('div');
-  bar.className = 'scrub';
-  bar.innerHTML =
-    '<b class="pp" title="Play or pause (space)"></b>' +
-    '<div class="tk"><i></i><u></u></div><span class="tm"></span>' +
-    `<span class="sp">${SPEEDS.map((s, i) => `<em data-sp="${i}">${s}&times;</em>`).join('')}</span>` +
-    '<span class="hint">drag to pan · scroll to zoom · click a room</span>';
-  app.appendChild(bar);
-  const ppEl = bar.querySelector('.pp');
-  const tkEl = bar.querySelector('.tk');
-  const fillEl = bar.querySelector('.tk i');
-  const markEl = bar.querySelector('.tk u');
-  const tmEl = bar.querySelector('.tm');
-  ppEl.addEventListener('click', () => {
-    playing = !playing;
-  });
-  bar.querySelector('.sp').addEventListener('click', (e) => {
-    const em = e.target.closest('[data-sp]');
-    if (em) speed = Number(em.dataset.sp);
-  });
-  const scrubTo = (cx) => {
-    const r = tkEl.getBoundingClientRect();
-    t = DAY_START + clamp((cx - r.left) / r.width) * (DAY_END - DAY_START);
-  };
-  let scrubbing = false;
-  tkEl.addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    playing = false;
-    scrubbing = true;
-    scrubTo(e.clientX);
-  });
-  addEventListener('pointermove', (e) => {
-    if (scrubbing) scrubTo(e.clientX);
-  });
-  const stopScrub = () => (scrubbing = false);
-  addEventListener('pointerup', stopScrub);
-  addEventListener('pointercancel', stopScrub);
-
   addEventListener('keydown', (e) => {
-    if (e.key === ' ') playing = !playing;
-    else if (e.key === 'ArrowRight') t = Math.min(DAY_END, t + 10);
-    else if (e.key === 'ArrowLeft') t = Math.max(DAY_START, t - 10);
-    else if (e.key === '[') goStep(stepIdx - 1);
-    else if (e.key === ']') goStep(stepIdx + 1);
-    else if (e.key === '1') ui.els.modes[0].click();
-    else if (e.key === '2') ui.els.modes[1].click();
-    else if (e.key === '3') ui.els.modes[2].click();
-    else if (e.key === 'h') glide(HOME_CAMERA);
-    else if (e.key === 'Escape') {
-      selUnit = null;
-      selRoom = null;
-      dropOpen = false;
-    } else if (e.key === 'f') {
+    if (e.target.matches('input, select, textarea')) return;
+    const k = e.key.toLowerCase();
+    touch();
+    if (k === ' ') {
+      playing = !playing;
+      hud.setPlaying(playing);
+    } else if (k === 'arrowright') seek(t + 10);
+    else if (k === 'arrowleft') seek(t - 10);
+    else if (k === '1') setCutaway('solid');
+    else if (k === '2') setCutaway('xray');
+    else if (k === '3') setCutaway('nowalls');
+    else if (k === '4') setCutaway('section');
+    else if (k === 'r') setScenario(cfg.scenario || 'normal');
+    else if (k === 'h') {
+      selectUnit(null);
+      glide(CAMERA_PRESETS.overview);
+    } else if (k === 'escape') {
+      follow(null);
+      selectUnit(null);
+    } else if (k === 'f') {
       if (document.fullscreenElement) document.exitFullscreen();
       else document.documentElement.requestFullscreen();
     } else return;
     e.preventDefault();
   });
 
-  // --------------------------------------------------------------- the panels
-  const histFor = (u) => {
-    const s = day.summary[u];
-    if (!s) return null;
-    return {
-      label: `${STATIONS[u].name} · waiting time`,
-      buckets: s.hist.slice(0, 31),
-      mean: s.waitMean.toFixed(1),
-      p50: s.waitP50,
-      p90: s.waitP90,
-    };
-  };
+  // ------------------------------------------------------------- auto tour
+  // The same script version 1 used: nothing in it that a visitor could not press themselves.
+  const TOUR = [
+    {hold: 5.5, act: () => {
+      selectUnit(null);
+      setCutaway('solid');
+    }},
+    {hold: 4.5, act: () => selectUnit('REG')},
+    {hold: 4.0, act: () => selectUnit('TRI')},
+    {hold: 6.5, act: () => selectUnit('DOC')},
+    {hold: 4.0, act: () => selectUnit('LAB')},
+    {hold: 4.0, act: () => selectUnit('XRY')},
+    {hold: 4.0, act: () => selectUnit('PHA')},
+    {hold: 4.5, act: () => selectUnit('ER')},
+    {hold: 4.5, act: () => selectUnit('OR')},
+    {hold: 4.5, act: () => selectUnit('WARD')},
+    {hold: 5.5, act: () => {
+      selectUnit(null);
+      setCutaway('nowalls');
+    }},
+    {hold: 5.5, act: () => {
+      setCutaway('xray');
+      hud.setCamBtn('top');
+      glide(CAMERA_PRESETS.top);
+    }},
+  ];
 
-  const kpiFor = (report) => {
-    const inSystem = report.people;
-    let worst = null;
-    for (const u of STATION_KEYS) {
-      const q = report.perUnit[u]?.q || 0;
-      if (!worst || q > worst.q) worst = {u, q};
-    }
-    const admitted = day.patients.filter((p) => p.admitted && p.tArrive <= t).length;
-    const left = day.patients.filter((p) => p.left && (p.tLeft ?? 1e9) <= t).length;
-    return [
-      {label: 'In the building', value: String(inSystem), sub: 'patients and staff on screen'},
-      {label: 'Busiest queue', value: worst ? String(worst.q) : '0', sub: worst && worst.q ? STATIONS[worst.u].name : 'nothing waiting', warn: worst && worst.q > 25},
-      {label: 'Gone home', value: String(left), sub: `of ${day.totals.arrived} who arrived today`},
-      {label: 'Admitted', value: String(admitted), sub: `${day.summary.WARD.servers} ward beds, ${day.summary.ICU.servers} in ICU`},
-    ];
-  };
-
-  const cardFor = (report) => {
-    if (mode === 'process' && journey) {
-      const p = journey.patient;
-      const steps = journeySteps();
-      const s = steps[stepIdx];
-      const end = p.left ? p.tLeft : DAY_END;
-      return {
-        title: proc.name,
-        sub: `Patient #${p.id} · arrived ${hhmm(p.tArrive)} · ${p.insName}`,
-        tag: s ? (s.kind === 'walk' ? 'WALKING' : s.kind === 'queue' ? 'WAITING' : s.kind === 'result' ? 'AWAITING RESULT' : 'BEING SEEN') : '',
-        tagColor: s && s.kind === 'walk' ? HOS.stWalk : s && s.kind === 'queue' ? HOS.stQueue : s && s.kind === 'result' ? HOS.stResult : HOS.stService,
-        thumb: s && s.step.k ? unitThumb(s.step.k) : null,
-        rows: [
-          ['Door to door', `${(end - p.tArrive).toFixed(0)} min`],
-          ['Spent queueing', `${p.steps.filter((x) => x.kind === ST.QUEUE).reduce((a, x) => a + ((x.t1 || 0) - x.t0), 0).toFixed(0)} min`],
-          ['Units visited', String(journey.visited.length)],
-          ['Clinic', p.clinic ? CLINICS[p.clinic].name : '—'],
-        ],
-        note: proc.note,
-        btns: [{id: 'focus', label: 'Centre'}, {id: 'home', label: 'Whole site'}],
-      };
-    }
-    if (selUnit) {
-      const s = day.summary[selUnit];
-      const d = STATIONS[selUnit];
-      const live = report.perUnit[selUnit] || {q: 0, inSvc: 0, res: 0};
-      const rooms = UNIT_ROOMS[selUnit] || [];
-      return {
-        title: d.name,
-        sub: `${rooms.length} room${rooms.length > 1 ? 's' : ''} on level ${d.floor} · ${d.c} service slots · ${d.svc} min each`,
-        tag: d.sizing === 'daily' ? 'SIZED ON THE DAY' : 'SIZED ON THE PEAK',
-        tagColor: d.sizing === 'daily' ? HOS.violet : HOS.blue,
-        thumb: unitThumb(selUnit),
-        rows: [
-          ['Waiting now', String(live.q)],
-          ['Busy now', `${live.inSvc} of ${d.c}`],
-          ['Seen today', String(s.served)],
-          ['Utilisation', `${(s.util * 100).toFixed(0)}%`],
-          ['Mean wait', `${s.waitMean.toFixed(1)} min`],
-          ['p90 wait', `${s.waitP90} min`],
-        ],
-        note: d.result ? `A result from here takes about ${d.result} more minutes after the patient leaves the room.` : null,
-        btns: [{id: 'focus', label: 'Centre'}, {id: 'home', label: 'Whole site'}, {id: 'close', label: 'Close'}],
-      };
-    }
-    const p = PLATES[plate];
-    const units = Object.values(ROOMS).filter((r) => r.plate === plate && r.unit).length;
-    return {
-      title: p.name,
-      sub: p.sub,
-      tag: 'LEVEL',
-      tagColor: HOS.blue,
-      thumb: null,
-      rows: [
-        ['Rooms', String(Object.values(ROOMS).filter((r) => r.plate === plate).length)],
-        ['Service points', String(units)],
-        ['Arrived today', String(day.totals.arrived)],
-        ['Mean stay', `${(day.totals.losSum / day.totals.losCount).toFixed(0)} min`],
-      ],
-      note: 'The four levels are drawn side by side: an isometric camera cannot see inside a stacked building. A lift transfer plays as the patient stepping into the lift on one level and out on another.',
-      btns: [{id: 'home', label: 'Whole site'}],
-    };
-  };
+  // --------------------------------------------------------------- panels
+  const camTargetY = () => floorLift(cam.floor ?? 1, explode) + 2.2;
 
   const unitRows = (report) => {
     let worstQ = 0;
-    for (const u of STATION_KEYS) worstQ = Math.max(worstQ, report.perUnit[u]?.q || 0);
-    return STATION_KEYS.filter((u) => UNIT_ROOMS[u])
-      .map((u) => {
-        const d = STATIONS[u];
-        const live = report.perUnit[u] || {q: 0, inSvc: 0};
-        const s = day.summary[u];
-        return {
-          key: u,
-          name: d.name,
-          dept: d.dept,
-          slots: d.c,
-          q: live.q,
-          inSvc: live.inSvc,
-          waitLabel: `${s.waitMean.toFixed(0)} min mean wait`,
-          selected: u === selUnit,
-          bottleneck: live.q > 0 && live.q === worstQ && worstQ > 6,
-        };
-      })
-      .sort((a, b) => b.q - a.q || a.name.localeCompare(b.name));
+    for (const u of LISTED) worstQ = Math.max(worstQ, report.perUnit[u]?.q || 0);
+    return LISTED.map((u) => {
+      const d = STATIONS[u];
+      const live = report.perUnit[u] || {q: 0, inSvc: 0};
+      const s = day.summary[u];
+      return {
+        key: u,
+        name: unitTh(u),
+        q: live.q,
+        inSvc: live.inSvc,
+        slots: s.servers,
+        util: s.util,
+        waitMean: s.waitMean,
+        selected: u === selUnit,
+        bottleneck: live.q > 0 && live.q === worstQ && worstQ > 6,
+      };
+    }).sort((a, b) => b.q - a.q || a.name.localeCompare(b.name));
   };
 
-  const SEG_COLOR = {[ST.WALK]: HOS.stWalk, [ST.QUEUE]: HOS.stQueue, [ST.SERVICE]: HOS.stService, [ST.RESULT]: HOS.stResult, [ST.BED]: HOS.stBed};
+  const patientCard = () => {
+    if (followId == null) return null;
+    const p = day.patients.find((q) => q.id === followId);
+    if (!p) return null;
+    const steps = [];
+    let nowIdx = -1;
+    for (let i = 0; i < p.steps.length; i++) {
+      const s = p.steps[i];
+      if (s.t0 > t) break;
+      const live = t < (s.t1 || DAY_END);
+      if (live) nowIdx = steps.length;
+      if (s.kind === 'walk') {
+        steps.push({label: `เดินไป${s.to in STATIONS ? unitTh(s.to) : 'ทางออก'}`, detail: `${((s.t1 || t) - s.t0).toFixed(1)} น.`, now: live});
+      } else if (s.kind === 'queue') {
+        steps.push({label: `รอคิว ${unitTh(s.k)}`, detail: `${((s.t1 || t) - s.t0).toFixed(0)} น.`, now: live});
+      } else if (s.kind === 'service' || s.kind === 'bed') {
+        steps.push({label: `${s.kind === 'bed' ? 'นอน' : 'รับบริการ'} ${unitTh(s.k)}`, detail: `${((s.t1 || t) - s.t0).toFixed(0)} น.`, now: live});
+      } else if (s.kind === 'result') {
+        steps.push({label: `รอผล ${unitTh(s.k)}`, detail: `${((s.t1 || t) - s.t0).toFixed(0)} น.`, now: live});
+      } else if (s.kind === 'lift') {
+        steps.push({label: 'ขึ้นลิฟต์', detail: `${((s.t1 || t) - s.t0).toFixed(1)} น.`, now: live});
+      }
+    }
+    const waited = p.steps.filter((s) => s.kind === 'queue' && s.t0 <= t).reduce((a, s) => a + ((Math.min(s.t1 || t, t)) - s.t0), 0);
+    const end = p.left ? p.tLeft : null;
+    return {
+      id: p.id,
+      now: nowIdx,
+      steps: steps.slice(-9),
+      note: `${laneTh(p.lane)} · สิทธิ${insTh(p.ins)}${p.esi ? ` · ESI ${p.esi}` : ''}${p.clinic ? ` · ${clinicTh(p.clinic)}` : ''} · มาถึง ${hhmm(p.tArrive)}${end ? ` กลับ ${hhmm(end)}` : ''} · รอรวม ${waited.toFixed(0)} นาที`,
+    };
+  };
+
+  /** The route the followed patient has walked, lifted onto the floors it crosses. */
+  const routeFor = (step) => {
+    const path = walkPath(step.from, step.to, {clinicFrom: step.clinic, clinicTo: step.clinic});
+    const pts = [];
+    path.pts.forEach((p, i) => {
+      if (path.liftAt > 0 && i === path.liftAt) return; // the lift ride is not a walk
+      pts.push(new THREE.Vector3(p[0], 0.06 + world.liftOf(p[3] ?? 1), p[2]));
+    });
+    return pts.length >= 2 ? pts : null;
+  };
 
   // ------------------------------------------------------------------- loop
   let last = performance.now();
   let visible = true;
+  let fpsT = 0;
+  let fpsN = 0;
+
   const draw = (now) => {
+    const dt = Math.min(0.1, Math.max(0, (now - last) / 1000));
+    last = now;
     if (!visible) {
-      last = now;
       requestAnimationFrame(draw);
       return;
     }
-    const dt = Math.min(0.1, Math.max(0, (now - last) / 1000));
-    last = now;
     if (playing) {
       t += dt * SPEEDS[speed];
       t = DAY_START + ((t - DAY_START) % (DAY_END - DAY_START));
     }
 
-    // in process mode the clock stays inside the followed patient's own day
-    if (mode === 'process' && journey) {
-      const p = journey.patient;
-      const end = (p.left ? p.tLeft : DAY_END) + 1;
-      if (t < p.tArrive) t = p.tArrive;
-      if (t > end) t = p.tArrive;
-      const steps = journeySteps();
-      const i = steps.findIndex((s) => t >= s.t0 && t < (s.t1 || DAY_END));
-      if (i >= 0 && i !== stepIdx) {
-        stepIdx = i;
-        const s = steps[i];
-        const rk = s.step.k ? (s.step.k === 'DOC' && s.step.clinic ? CLINIC_ROOM[s.step.clinic] : UNIT_ROOMS[s.step.k]?.[0]) : null;
-        if (rk && !manual) {
-          plate = ROOMS[rk].plate;
-          glide(roomCamera(rk));
-        }
+    // ---- the tour takes over when nobody has touched anything
+    idleFor += dt;
+    if (!tour && idleFor > IDLE_BEFORE_TOUR) {
+      tour = true;
+      tourI = -1;
+      tourT = 0;
+      hud.setTour(true);
+    }
+    if (tour) {
+      tourT -= dt;
+      if (tourT <= 0) {
+        tourI = (tourI + 1) % TOUR.length;
+        TOUR[tourI].act();
+        tourT = TOUR[tourI].hold;
+        idleFor = IDLE_BEFORE_TOUR + 1; // the tour pressing its own buttons is not a visitor touching them
       }
     }
 
+    // ---- the stack opens and closes
+    explode += (explodeWant - explode) * (1 - Math.pow(0.002, dt));
+    if (Math.abs(explode - explodeWant) < 0.002) explode = explodeWant;
+    world.setView({floor: Math.abs(explode - 1) < 0.01 ? null : floorFilter, explode});
+
     const report = world.pose(t);
 
-    // the camera eases toward where the mode wants it, unless the visitor has taken the wheel
+    // ---- the camera eases to where the mode wants it, unless the visitor has taken the wheel
     const k = 1 - Math.pow(0.0015, dt);
-    for (const key of ['x', 'z', 'd', 'az', 'el']) cam[key] += (camWant[key] - cam[key]) * k;
-
-    // follow the patient in process mode
-    if (mode === 'process' && report.hero && !manual) {
+    for (const key of ['x', 'z', 'd', 'az', 'el', 'floor']) {
+      if (camWant[key] == null) continue;
+      cam[key] += (camWant[key] - cam[key]) * k;
+    }
+    if (followId != null && report.hero && !manual) {
       camWant.x += (report.hero.x - camWant.x) * 0.08;
       camWant.z += (report.hero.z - camWant.z) * 0.08;
+      camWant.d = Math.min(camWant.d, 46);
+      const hf = report.hero.step?.k ? unitFloor(report.hero.step.k, report.hero.step.clinic) : cam.floor;
+      camWant.floor += (hf - camWant.floor) * 0.1;
     }
 
-    // pan: one correction a frame, against the camera actually on screen
     if (drag && drag.panning && drag.grab) {
-      const g = groundAt(drag.cur.x, drag.cur.y);
+      const g = planeAt(drag.cur.x, drag.cur.y, camTargetY());
       if (g) {
         cam.x += drag.grab.x - g.x;
         cam.z += drag.grab.z - g.z;
@@ -678,140 +726,80 @@ export async function runHospitalApp(opts = {}) {
       }
     }
 
-    // the selection marks
+    // ---- marks: the selected room, the bottleneck, the route of whoever is followed
     const obj = selRoom ? world.pickables[selRoom] : null;
     const fade = selRoom ? clamp((t - selT0) / 0.4 + 0.3) : 0;
     sel.box(obj || null, obj ? Math.max(0.2, fade) : 0);
-    if (mode === 'process' && journey) {
-      const s = journeySteps()[stepIdx];
-      if (s && s.kind === 'walk') sel.route(routeFor(s.step), 1, 0.9);
-      else sel.route(null, 0, 0);
-    } else sel.route(null, 0, 0);
+    let bottleneck = null;
+    for (const u of LISTED) {
+      const q = report.perUnit[u]?.q || 0;
+      if (q > 6 && (!bottleneck || q > bottleneck.q)) bottleneck = {key: u, q, name: unitTh(u)};
+    }
+    showRing(bottleneck && (floorFilter == null || unitFloor(bottleneck.key) === floorFilter) ? UNIT_ROOMS[bottleneck.key]?.[0] : null);
+    if (followId != null && report.hero && report.hero.step?.kind === 'walk') sel.route(routeFor(report.hero.step), 1, 0.9);
+    else sel.route(null, 0, 0);
     sel.update();
 
-    // the sun never moves, so the shadow map only needs refreshing when something under it has
     if (frameNo++ % 3 === 0) st.renderer.shadowMap.needsUpdate = true;
-    world.setDetail(cam.x, cam.z, cam.d);
-    st.frame({tx: cam.x, ty: 2.2, tz: cam.z, az: cam.az * D2R, el: cam.el * D2R, d: cam.d, fov: FOV, sx: -14, sy: 24});
+    world.setDetail(cam.x, camTargetY(), cam.z, cam.d);
+    st.frame({tx: cam.x, ty: camTargetY(), tz: cam.z, az: cam.az * D2R, el: cam.el * D2R, d: cam.d, fov: FOV, sx: -14, sy: 24});
 
-    // pins: the plate names and the busiest units
-    const pins = [];
-    for (const pk of PLATE_KEYS) {
-      const pl = PLATES[pk];
-      const q = st.project(new THREE.Vector3(pl.x, 0.1, pl.z - 34));
-      if (q) pins.push({kind: 'plate', x: q[0], y: q[1], text: pl.name, sub: pl.sub});
-    }
-    for (const u of STATION_KEYS) {
-      const live = report.perUnit[u];
-      if (!live || (live.q < 8 && u !== selUnit)) continue;
-      const a = world.anchors[u];
-      if (!a) continue;
-      const q = st.project(a());
-      if (!q || q[1] < 80 || q[1] > 820 || q[0] < 350 || q[0] > 1250) continue;
-      pins.push({
-        kind: u === selUnit ? 'sel' : live.q > 25 ? 'hot' : '',
-        x: q[0],
-        y: q[1],
-        text: `${STATIONS[u].name}`,
-        sub: `${live.q} waiting · ${live.inSvc}/${STATIONS[u].c} busy`,
+    // ---- the panels, four times a second rather than sixty
+    if (frameNo % 6 === 0) {
+      const u = summaryUnit();
+      hud.update({
+        clock: hhmm(t),
+        t,
+        dragging,
+        scenarioLabel: cfg.scenario ? scenarioOf(cfg.scenario).label : 'กำหนดเอง',
+        totals: day.totals,
+        inSystem: day.patients.filter((p) => p.tArrive <= t && !(p.left && (p.tLeft ?? 1e9) <= t)).length,
+        losMean: day.totals.losSum / Math.max(1, day.totals.losCount),
+        depts: unitRows(report),
+        bottleneck,
+        charts: frameNo % 24 === 0 ? {unit: u, unitName: unitTh(u), history: day.history, summary: day.summary[u], util: LISTED.map((k2) => ({key: k2, util: day.summary[k2].util}))} : null,
+        patient: patientCard(),
       });
     }
 
-    const steps = mode === 'process' ? journeySteps() : [];
-    ui.update({
-      clock: hhmm(t),
-      dayName: 'Monday',
-      mode,
-      plate,
-      plateInfo: PLATES[plate],
-      plates: PLATE_KEYS.map((k) => PLATES[k]),
-      dropOpen,
-      kpi: kpiFor(report),
-      units: unitRows(report),
-      processes: PROCESSES.map((p) => ({
-        key: p.key,
-        name: p.name,
-        note: p.note,
-        routeLabel: p.route.join(' › '),
-        selected: proc?.key === p.key,
-      })),
-      steps: steps.map((s, i) => ({
-        key: s.key || s.name,
-        n: s.n || '',
-        name: s.name,
-        walk: s.kind === 'walk',
-        detail:
-          s.kind === 'walk'
-            ? `${(s.t1 - s.t0).toFixed(1)} min`
-            : `${s.wait > 0.5 ? `waited ${s.wait.toFixed(0)} · ` : ''}seen ${s.svc.toFixed(0)} min${s.res > 0.5 ? ` · +${s.res.toFixed(0)} result` : ''}`,
-        state: i < stepIdx ? 'done' : i === stepIdx ? 'now' : 'next',
-      })),
-      card: cardFor(report),
-      hist: histFor(selUnit || 'DOC'),
-      follow:
-        mode === 'process' && journey
-          ? {
-              title: `Following patient #${journey.patient.id}`,
-              sub: `${proc.name} · ${hhmm(journey.patient.tArrive)} → ${hhmm(journey.patient.left ? journey.patient.tLeft : DAY_END)}`,
-              at: stepIdx,
-              segs: journey.patient.steps.map((s) => ({
-                w: Math.max(0.3, (s.t1 || 0) - s.t0),
-                color: SEG_COLOR[s.kind] || HOS.shade,
-                label: `${s.kind} ${s.k || ''}`,
-              })),
-            }
-          : null,
-      pins,
-    });
-
-    ppEl.className = `pp${playing ? ' on' : ''}`;
-    const frac = (t - DAY_START) / (DAY_END - DAY_START);
-    fillEl.style.width = `${frac * 100}%`;
-    tmEl.textContent = `${hhmm(t)}`;
-    for (const em of bar.querySelectorAll('[data-sp]')) em.classList.toggle('on', Number(em.dataset.sp) === speed);
-    if (journey) {
-      const p = journey.patient;
-      const a = (p.tArrive - DAY_START) / (DAY_END - DAY_START);
-      const b = ((p.left ? p.tLeft : DAY_END) - DAY_START) / (DAY_END - DAY_START);
-      markEl.style.display = 'block';
-      markEl.style.left = `${a * 100}%`;
-      markEl.style.width = `${Math.max(0.4, (b - a) * 100)}%`;
-    } else markEl.style.display = 'none';
-
+    fpsN++;
+    fpsT += dt;
+    if (fpsT >= 1) {
+      hud.setFps(Math.round(fpsN / fpsT));
+      fpsN = 0;
+      fpsT = 0;
+    }
     requestAnimationFrame(draw);
   };
 
-  /** The route drawn on the floor for the walking step being played, cached per leg. */
-  const routeCache = new Map();
-  function routeFor(step) {
-    const key = `${step.from}>${step.to}|${step.clinic || ''}`;
-    if (routeCache.has(key)) return routeCache.get(key);
-    const path = walkPath(step.from, step.to, {clinicFrom: step.clinic, clinicTo: step.clinic});
-    // drop the leg that crosses between two plates: that gap is a lift ride, not a walk, and a ribbon drawn across
-    // it would read as a corridor between two buildings
-    const pts = [];
-    path.pts.forEach((p, i) => {
-      if (path.liftAt > 0 && i === path.liftAt) return;
-      pts.push(new THREE.Vector3(p[0], 0.06, p[2]));
-    });
-    const out = pts.length >= 2 ? pts : null;
-    routeCache.set(key, out);
-    return out;
-  }
-
-  window.HOSPITAL = {world, cam, get day() {
-    return day;
-  }, get t() {
-    return t;
-  }, seek: (v) => (t = v), selectUnit, selectProcess, pickAt};
+  window.HOSPITAL = {
+    world,
+    cam,
+    get day() {
+      return day;
+    },
+    get t() {
+      return t;
+    },
+    get cfg() {
+      return cfg;
+    },
+    seek,
+    selectUnit,
+    follow,
+    setCutaway,
+    setFloor,
+    setScenario,
+    pickRoom,
+    rerun,
+  };
   window.SIM = {ready: true, duration: (DAY_END - DAY_START) / 12, render: (v) => (t = DAY_START + v * 12)};
-  selectUnit(null);
   requestAnimationFrame(draw);
 
   return {
     cfg,
     getDay: () => day,
-    rerun: rerunDay,
+    rerun,
     setVisible: (v) => {
       visible = v;
       if (v) {
@@ -819,14 +807,6 @@ export async function runHospitalApp(opts = {}) {
         last = performance.now();
       }
     },
-    /** Called from the other tabs: show this unit working, in its own room. */
-    focusUnit: (key) => {
-      if (!STATIONS[key]) return;
-      mode = 'unit';
-      proc = null;
-      journey = null;
-      world.setFollow(null);
-      selectUnit(key);
-    },
+    focusUnit: (key) => selectUnit(key),
   };
 }
