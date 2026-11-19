@@ -26,7 +26,6 @@ const CAMS = [
   {key: 'top', label: 'ผังจากบน'},
   {key: 'eye', label: 'ระดับสายตา'},
 ];
-const SPEEDS = [1, 4, 12, 40, 120];
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const n0 = (v) => (Number.isFinite(v) ? Math.round(v).toLocaleString('en-US') : '—');
@@ -40,7 +39,7 @@ const n1 = (v) => (Number.isFinite(v) ? v.toFixed(1) : '—');
  * @param sliders  the slider specs from scenarios.js
  * @param floors   [{key, floor, name, sub}]
  */
-export function createHud({host, cfg, handlers, sliders, floors}) {
+export function createHud({host, cfg, handlers, sliders, floors, speeds}) {
   const ui = document.createElement('div');
   ui.className = 'ui';
   ui.innerHTML = `
@@ -134,6 +133,15 @@ export function createHud({host, cfg, handlers, sliders, floors}) {
     </div>`;
   host.appendChild(ui);
 
+  // Queue counts, floating over the units they belong to.
+  //
+  // A separate layer rather than a panel, because the question "how many are waiting HERE" is a question about a
+  // place: the number has to be next to the room. It is drawn from the same per-unit report the list on the left
+  // reads, so the chip over the pharmacy and the row in the list can never show different numbers.
+  const pinLayer = document.createElement('div');
+  pinLayer.className = 'pins';
+  ui.appendChild(pinLayer);
+
   const tour = document.createElement('div');
   tour.id = 'tour';
   tour.innerHTML = '<i></i><span>กำลังพาชมอัตโนมัติ — แตะเพื่อควบคุมเอง</span>';
@@ -161,7 +169,7 @@ export function createHud({host, cfg, handlers, sliders, floors}) {
   group(el('bCut'), CUTAWAYS, 'cutaway');
   group(el('bFloor'), [{key: 'all', label: 'ทั้งอาคาร'}, ...floors.map((f) => ({key: String(f.floor), label: f.name, hint: f.sub}))], 'floor');
   group(el('bCam'), CAMS, 'camera');
-  group(el('bSpeed'), SPEEDS.map((s, i) => ({key: String(i), label: `${s}×`})), 'speed');
+  group(el('bSpeed'), speeds.map((s, i) => ({key: String(i), label: `${s}×`})), 'speed');
 
   const press = (act, value) => {
     for (const b of ui.querySelectorAll(`[data-act="${act}"][data-v]`)) b.setAttribute('aria-pressed', String(b.dataset.v === String(value)));
@@ -364,6 +372,8 @@ export function createHud({host, cfg, handlers, sliders, floors}) {
 
   // ─────────────────────────────────────────────────────── per-frame update
   let lastDeptKey = '';
+  let lastDeptAt = 0;
+  let lastSel = null;
   let lastCardKey = '';
 
   function update(s) {
@@ -379,10 +389,15 @@ export function createHud({host, cfg, handlers, sliders, floors}) {
     els.bot.textContent = s.bottleneck ? `คอขวดตอนนี้: ${s.bottleneck.name} · ${s.bottleneck.q} คนรออยู่` : '';
     els.bot.classList.toggle('on', !!s.bottleneck);
 
-    // the unit list: rebuilt only when the numbers it shows actually change
+    // The unit list: rebuilt when the numbers change, but at most three times a second. At sixty it would be
+    // replacing the rows between a mouse-down and a mouse-up, which eats the click.
+    const sel = s.depts.find((d) => d.selected);
+    const selKey = sel ? sel.key : null;
     const key = s.depts.map((d) => `${d.key}${d.q}${d.inSvc}${d.selected ? 1 : 0}${d.bottleneck ? 1 : 0}`).join('|');
-    if (key !== lastDeptKey) {
+    const now = performance.now();
+    if (key !== lastDeptKey && (now - lastDeptAt > 320 || selKey !== lastSel)) {
       lastDeptKey = key;
+      lastDeptAt = now;
       els.dlist.innerHTML = s.depts
         .map(
           (d) => `<button class="dept${d.bottleneck ? ' hot' : ''}" data-act="unit" data-unit="${d.key}" aria-pressed="${d.selected}">
@@ -392,6 +407,16 @@ export function createHud({host, cfg, handlers, sliders, floors}) {
           </button>`,
         )
         .join('');
+    }
+
+    // Picking a room in the 3D moves the list to that room's unit: the panel and the building agree on what is
+    // selected, and the row is brought into view rather than being highlighted somewhere below the fold.
+    if (selKey !== lastSel) {
+      lastSel = selKey;
+      if (selKey) {
+        const row = els.dlist.querySelector(`[data-unit="${selKey}"]`);
+        if (row) row.scrollIntoView({block: 'nearest'});
+      }
     }
 
     if (s.charts) {
@@ -421,6 +446,18 @@ export function createHud({host, cfg, handlers, sliders, floors}) {
     slEls,
     update,
     syncSliders,
+    /**
+     * @param pins [{key, x, y, n, name, sub, cls}] in screen pixels, already filtered to what is visible.
+     * `n` is a queue count; a pin with `n === ''` is a label instead, which is what the selected room gets.
+     */
+    setPins: (pins) => {
+      pinLayer.innerHTML = pins
+        .map(
+          (p) => `<div class="pin ${p.cls}" style="left:${p.x.toFixed(0)}px;top:${p.y.toFixed(0)}px">
+            ${p.n === '' ? '' : `<b>${p.n}</b>`}${p.name ? `<s>${esc(p.name)}</s>` : ''}${p.sub ? `<em>${esc(p.sub)}</em>` : ''}</div>`,
+        )
+        .join('');
+    },
     setScenario: (k, label) => {
       press('scenario', k);
       els.scen.textContent = label;

@@ -28,7 +28,7 @@ import {createHud} from './hud.js';
 import {createWorld} from './world.js';
 import {createSelection} from './select.js';
 import {SCENARIOS, applyScenario, matchesScenario, scenarioOf, sliderSpecs} from './scenarios.js';
-import {clinicTh, insTh, laneTh, unitTh} from './th.js';
+import {clinicTh, insTh, laneTh, roomTh, unitTh} from './th.js';
 
 const D2R = Math.PI / 180;
 const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
@@ -38,7 +38,7 @@ const MAX_D = 560;
 const MIN_EL = 4;
 const MAX_EL = 80;
 const PAN_SLOP = 6;
-const SPEEDS = [1, 4, 12, 40, 120]; // simulated minutes per real second
+const SPEEDS = [1, 2, 4, 12, 40, 120]; // simulated minutes per real second
 const IDLE_BEFORE_TOUR = 25; // seconds untouched before the page starts touring itself
 
 /** Units that get a row in the list and a slider: everything the model queues for and the plan has a room for. */
@@ -72,7 +72,7 @@ export async function runHospitalApp(opts = {}) {
   // ---------------------------------------------------------------- state
   let t = 7 * 60 + 40; // open on the morning crush, where the interesting answer lives
   let playing = true;
-  let speed = 1; // 4x — a minute of hospital every fifteen seconds, slow enough to watch one patient cross a room
+  let speed = 1; // 2x — slow enough to watch one patient cross a room
   let cutaway = 'solid';
   let floorFilter = null;
   let explode = 1;
@@ -327,6 +327,7 @@ export async function runHospitalApp(opts = {}) {
     host: app,
     cfg,
     sliders,
+    speeds: SPEEDS,
     floors: PLATE_KEYS.map((k) => PLATES[k]),
     handlers: {
       selectUnit: (u) => {
@@ -544,8 +545,11 @@ export async function runHospitalApp(opts = {}) {
       else selectRoom(rk);
       return;
     }
+    // a click on nothing drops the selection and the followed patient — but leaves the floor and the camera where
+    // the visitor put them. Resetting the building because somebody clicked the sky is not a selection change.
     follow(null);
-    selectUnit(null);
+    selUnit = null;
+    selRoom = null;
   };
   canvas.addEventListener('pointerup', endPointer);
   canvas.addEventListener('pointercancel', endPointer);
@@ -634,6 +638,14 @@ export async function runHospitalApp(opts = {}) {
   // --------------------------------------------------------------- panels
   const camTargetY = () => floorLift(cam.floor ?? 1, explode) + 2.2;
 
+  /**
+   * The unit list.
+   *
+   * Ordered by floor and then by the model's own order, which groups the departments — NOT by queue length. Sorting
+   * by queue looks livelier and is worse to use: the rows reorder several times a second, so the row you are
+   * reaching for moves out from under the pointer, and the list you learned the shape of yesterday is a different
+   * list today. The busiest unit is already called out in red, at the top of the screen and around its row.
+   */
   const unitRows = (report) => {
     let worstQ = 0;
     for (const u of LISTED) worstQ = Math.max(worstQ, report.perUnit[u]?.q || 0);
@@ -649,10 +661,11 @@ export async function runHospitalApp(opts = {}) {
         slots: s.servers,
         util: s.util,
         waitMean: s.waitMean,
+        floor: unitFloor(u),
         selected: u === selUnit,
         bottleneck: live.q > 0 && live.q === worstQ && worstQ > 6,
       };
-    }).sort((a, b) => b.q - a.q || a.name.localeCompare(b.name));
+    }).sort((a, b) => a.floor - b.floor || LISTED.indexOf(a.key) - LISTED.indexOf(b.key));
   };
 
   const patientCard = () => {
@@ -686,6 +699,61 @@ export async function runHospitalApp(opts = {}) {
       steps: steps.slice(-9),
       note: `${laneTh(p.lane)} · สิทธิ${insTh(p.ins)}${p.esi ? ` · ESI ${p.esi}` : ''}${p.clinic ? ` · ${clinicTh(p.clinic)}` : ''} · มาถึง ${hhmm(p.tArrive)}${end ? ` กลับ ${hhmm(end)}` : ''} · รอรวม ${waited.toFixed(0)} นาที`,
     };
+  };
+
+  /**
+   * A chip over every unit saying how many people are waiting there.
+   *
+   * Only units whose floor is on screen, only chips that land inside the viewport, and the name is dropped when
+   * the camera is far enough away that it would be a smear. The count is `report.perUnit[u].q` — the same number
+   * the list on the left prints, from the same frame.
+   */
+  const pinsFor = (report) => {
+    const out = [];
+    const near = cam.d < 230;
+    const w = st.size.w;
+    const h = st.size.h;
+    for (const u of LISTED) {
+      if (floorFilter != null && unitFloor(u) !== floorFilter) continue;
+      const anchor = world.anchors[u];
+      if (!anchor) continue;
+      const q = st.project(anchor());
+      if (!q || q[0] < 24 || q[0] > w - 24 || q[1] < 30 || q[1] > h - 24) continue;
+      const n = report.perUnit[u]?.q || 0;
+      out.push({
+        key: u,
+        x: q[0],
+        y: q[1],
+        n,
+        name: near || n > 0 ? unitTh(u) : '',
+        sub: '',
+        cls: n === 0 ? 'zero' : n >= 25 ? 'bad' : n >= 10 ? 'warn' : 'ok',
+      });
+    }
+
+    // The selected room names itself, above the roof line and above its own queue chip. Any room can be selected,
+    // including the ones with no queue of their own — a lift lobby, a waiting hall, the sterile corridor — which is
+    // the point: clicking something in the building should tell you what you clicked.
+    if (selRoom && ROOMS[selRoom]) {
+      const r = ROOMS[selRoom];
+      if (floorFilter == null || r.floor === floorFilter) {
+        const q2 = st.project(new THREE.Vector3(r.x, 5.6 + world.liftOf(r.floor), r.z));
+        if (q2 && q2[0] > 30 && q2[0] < w - 30 && q2[1] > 24 && q2[1] < h - 24) {
+          const seats = r.seats ? ` · ที่นั่งรอ ${r.seats}` : '';
+          const slots = r.slots ? ` · ${r.slots} จุดบริการ` : '';
+          out.push({
+            key: '__room',
+            x: q2[0],
+            y: q2[1],
+            n: '',
+            name: roomTh(r.key, r.unit) || r.name,
+            sub: `${r.name} · ${PLATES[`F${r.floor}`].name}${slots}${seats}`,
+            cls: 'room',
+          });
+        }
+      }
+    }
+    return out;
   };
 
   /** The route the followed patient has walked, lifted onto the floors it crosses. */
@@ -801,6 +869,7 @@ export async function runHospitalApp(opts = {}) {
         charts: frameNo % 24 === 0 ? {unit: u, unitName: unitTh(u), history: day.history, summary: day.summary[u], util: LISTED.map((k2) => ({key: k2, util: day.summary[k2].util}))} : null,
         patient: patientCard(),
       });
+      hud.setPins(pinsFor(report));
     }
 
     fpsN++;
