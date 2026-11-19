@@ -710,7 +710,6 @@ export async function runHospitalApp(opts = {}) {
    */
   const pinsFor = (report) => {
     const out = [];
-    const near = cam.d < 230;
     const w = st.size.w;
     const h = st.size.h;
     for (const u of LISTED) {
@@ -724,10 +723,10 @@ export async function runHospitalApp(opts = {}) {
         key: u,
         x: q[0],
         y: q[1],
-        n,
-        name: near || n > 0 ? unitTh(u) : '',
+        n: '',
+        name: unitTh(u),
         sub: '',
-        cls: n === 0 ? 'zero' : n >= 25 ? 'bad' : n >= 10 ? 'warn' : 'ok',
+        cls: `unit ${n === 0 ? 'zero' : n >= 25 ? 'bad' : n >= 10 ? 'warn' : 'ok'}`,
       });
     }
 
