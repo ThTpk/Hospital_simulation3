@@ -116,6 +116,7 @@ html, body { background: var(--bg); overscroll-behavior: none; }
 .dr1 { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
 .dn { font-size: 13.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dq { font-family: var(--mono); font-size: 13.5px; font-weight: 600; flex-shrink: 0; }
+.dq s { text-decoration: none; font-family: var(--sans); font-size: 9.5px; font-weight: 500; color: var(--ink-3); margin-left: 3px; }
 .bar { height: 3px; border-radius: 2px; background: var(--line); margin-top: 4px; overflow: hidden; }
 .bar i { display: block; height: 100%; border-radius: 2px; transition: width .3s, background .3s; }
 .dr2 { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--ink-3); margin-top: 3px; font-family: var(--mono); }

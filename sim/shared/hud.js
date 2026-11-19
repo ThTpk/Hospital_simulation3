@@ -401,9 +401,9 @@ export function createHud({host, cfg, handlers, sliders, floors, speeds}) {
       els.dlist.innerHTML = s.depts
         .map(
           (d) => `<button class="dept${d.bottleneck ? ' hot' : ''}" data-act="unit" data-unit="${d.key}" aria-pressed="${d.selected}">
-            <div class="dr1"><span class="dn">${esc(d.name)}</span><span class="dq">${d.q}</span></div>
+            <div class="dr1"><span class="dn">${esc(d.name)}</span><span class="dq">${d.q}<s>คนรอ</s></span></div>
             <div class="bar"><i style="width:${Math.min(100, d.util * 100).toFixed(0)}%;background:${d.util >= 1 ? HOS.rose : d.util >= 0.85 ? HOS.amber : HOS.blue}"></i></div>
-            <div class="dr2"><span>${d.inSvc}/${d.slots} ทำงาน</span><span>รอ ${n1(d.waitMean)} น.</span></div>
+            <div class="dr2"><span>${d.inSvc}/${d.slots} ทำงาน</span><span>รอ ${d.q} คน · เฉลี่ย ${n1(d.waitMean)} น.</span></div>
           </button>`,
         )
         .join('');
