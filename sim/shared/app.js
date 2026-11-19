@@ -129,6 +129,30 @@ export async function runHospitalApp(opts = {}) {
     manual = false;
   };
 
+  /**
+   * Move the camera by hand, from a key.
+   *
+   * Everything goes through here so that a key press and a mouse drag leave the camera in exactly the same state:
+   * both `cam` (where it is) and `camWant` (where it is heading) are set, and `manual` is raised so that nothing —
+   * a selected unit, a followed patient, the tour — drags the view back out from under the visitor.
+   */
+  const nudge = ({az = 0, el = 0, zoom = 1, fwd = 0, side = 0, floor = 0}) => {
+    manual = true;
+    if (az) camWant.az = cam.az = (cam.az + az) % 360;
+    if (el) camWant.el = cam.el = clamp(cam.el + el, MIN_EL, MAX_EL);
+    if (zoom !== 1) camWant.d = cam.d = clamp(cam.d * zoom, MIN_D, MAX_D);
+    if (fwd || side) {
+      // pan in the direction the camera is facing, not along the world axes, so "left" is left on screen
+      const r = cam.az * D2R;
+      const step = Math.max(4, cam.d * 0.06);
+      const dx = -Math.sin(r) * fwd * step + Math.cos(r) * side * step;
+      const dz = -Math.cos(r) * fwd * step - Math.sin(r) * side * step;
+      camWant.x = cam.x += dx;
+      camWant.z = cam.z += dz;
+    }
+    if (floor) camWant.floor = cam.floor = clamp((cam.floor ?? 1) + floor, 1, 4);
+  };
+
   const touch = () => {
     idleFor = 0;
     if (tour) {
@@ -541,18 +565,34 @@ export async function runHospitalApp(opts = {}) {
     if (e.target.matches('input, select, textarea')) return;
     const k = e.key.toLowerCase();
     touch();
-    if (k === ' ') {
+    // ---- the camera: arrows turn and tilt it, WASD slides it, + and - zoom. These work in every view, at every
+    // floor and cutaway, and whether or not a unit is selected or a patient is being followed.
+    if (k === 'arrowleft' && !e.shiftKey) nudge({az: 5});
+    else if (k === 'arrowright' && !e.shiftKey) nudge({az: -5});
+    else if (k === 'arrowup' && !e.shiftKey) nudge({el: 3});
+    else if (k === 'arrowdown' && !e.shiftKey) nudge({el: -3});
+    else if (k === 'w') nudge({fwd: 1});
+    else if (k === 's') nudge({fwd: -1});
+    else if (k === 'a') nudge({side: -1});
+    else if (k === 'd') nudge({side: 1});
+    else if (k === '+' || k === '=') nudge({zoom: 1 / 1.14});
+    else if (k === '-' || k === '_') nudge({zoom: 1.14});
+    else if (k === 'pageup') nudge({floor: 1});
+    else if (k === 'pagedown') nudge({floor: -1});
+    // ---- the clock keeps the arrows with shift held, and the brackets as a second way in
+    else if (k === 'arrowright' || k === ']') seek(t + 10);
+    else if (k === 'arrowleft' || k === '[') seek(t - 10);
+    else if (k === ' ') {
       playing = !playing;
       hud.setPlaying(playing);
-    } else if (k === 'arrowright') seek(t + 10);
-    else if (k === 'arrowleft') seek(t - 10);
-    else if (k === '1') setCutaway('solid');
+    } else if (k === '1') setCutaway('solid');
     else if (k === '2') setCutaway('xray');
     else if (k === '3') setCutaway('nowalls');
     else if (k === '4') setCutaway('section');
     else if (k === 'r') setScenario(cfg.scenario || 'normal');
     else if (k === 'h') {
       selectUnit(null);
+      hud.setCamBtn('overview');
       glide(CAMERA_PRESETS.overview);
     } else if (k === 'escape') {
       follow(null);
@@ -708,6 +748,7 @@ export async function runHospitalApp(opts = {}) {
       if (camWant[key] == null) continue;
       cam[key] += (camWant[key] - cam[key]) * k;
     }
+    // the camera follows the patient only while nobody is steering: one drag, one key, and it stops pulling
     if (followId != null && report.hero && !manual) {
       camWant.x += (report.hero.x - camWant.x) * 0.08;
       camWant.z += (report.hero.z - camWant.z) * 0.08;

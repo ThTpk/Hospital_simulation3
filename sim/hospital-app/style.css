@@ -46,26 +46,34 @@ html, body { background: var(--bg); overscroll-behavior: none; }
 #gl { cursor: grab; }
 #gl:active { cursor: grabbing; }
 
-/* ───────── layout ───────── */
-.ui {
-  position: absolute; inset: 0; pointer-events: none; padding: 13px;
-  display: grid; gap: 11px;
-  grid-template-columns: minmax(214px, 236px) 1fr minmax(214px, 252px);
-  grid-template-rows: auto 1fr auto;
-  grid-template-areas: 'tl top tr' 'ml . mr' 'bl bot br';
-  font-size: 14px; line-height: 1.45;
-}
+/* ───────── layout ─────────
+ *
+ * Two columns, each the full height of the window, with the middle left free for the hospital.
+ *
+ * This was a 3x3 CSS grid, which looked tidy and was wrong: a grid row is as tall as the tallest panel in it, so
+ * the charts on the right (470 px of canvas) set the height of the top row, squeezed the unit list on the left
+ * into 130 px, and pushed the control groups under it half off the bottom — which is where the scenario buttons
+ * went. Columns that do not share rows cannot do that to each other.
+ */
+.ui { position: absolute; inset: 0; pointer-events: none; padding: 13px; font-size: 14px; line-height: 1.45; }
 .ui > * { pointer-events: auto; }
+.col {
+  position: absolute; top: 13px; bottom: 13px; display: flex; flex-direction: column; gap: 11px;
+  overflow-y: auto; overflow-x: hidden; scrollbar-width: thin;
+}
+.col-l { left: 13px; width: 276px; }
+.col-r { right: 13px; width: 304px; }
+.col > .p { flex: none; }
 .p {
   background: var(--panel); backdrop-filter: blur(14px) saturate(1.1); -webkit-backdrop-filter: blur(14px) saturate(1.1);
   border-radius: var(--r); box-shadow: var(--sh); padding: 11px 12px;
 }
 .p h3 {
-  font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+  font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
   color: var(--ink-3); margin: 0 0 8px; display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
 }
 .p h3 > span {
-  font-weight: 500; font-size: 10px; letter-spacing: 0; text-transform: none; color: var(--ink-2);
+  font-weight: 500; font-size: 10.5px; letter-spacing: 0; text-transform: none; color: var(--ink-2);
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right;
 }
 .mono { font-family: var(--mono); font-weight: 400; }
@@ -73,47 +81,53 @@ html, body { background: var(--bg); overscroll-behavior: none; }
 #title { grid-area: top; justify-self: center; align-self: start; text-align: center; pointer-events: none; }
 #title h1 { font-size: 14px; font-weight: 600; letter-spacing: -.01em; margin: 0; }
 #title p { font-size: 11px; color: var(--ink-2); margin: 0; }
-#clock { grid-area: tl; align-self: start; }
-#depts { grid-area: ml; align-self: stretch; min-height: 0; max-height: 100%; overflow-y: auto; scrollbar-width: thin; }
-#charts { grid-area: tr; align-self: start; }
-#rightcol { grid-area: mr; align-self: stretch; min-height: 0; max-height: 100%; overflow-y: auto; scrollbar-width: thin; display: flex; flex-direction: column; gap: 11px; }
-#ctrl { grid-area: bl; align-self: end; }
-#bottom { grid-area: bot; align-self: end; justify-self: center; width: min(680px, 100%); display: flex; flex-direction: column; gap: 8px; }
-#card { grid-area: br; align-self: end; }
+/* The unit list is the one panel that gives way. Everything else in the column keeps its natural height, so the
+   control groups below it are never clipped. */
+#depts { flex: 1 1 auto; min-height: 96px; overflow-y: auto; scrollbar-width: thin; }
+#title {
+  position: absolute; left: 50%; top: 13px; transform: translateX(-50%); text-align: center; pointer-events: none;
+  max-width: calc(100% - 640px);
+}
+#bottom {
+  position: absolute; left: 50%; bottom: 13px; transform: translateX(-50%);
+  width: min(680px, calc(100% - 640px)); display: flex; flex-direction: column; gap: 8px;
+}
 
 /* ───────── clock and totals ───────── */
 .clockrow { display: flex; align-items: baseline; gap: 9px; margin-bottom: 9px; }
 .time { font-family: var(--mono); font-size: 30px; font-weight: 600; letter-spacing: -.02em; line-height: 1; }
 .scen { font-size: 11px; color: var(--ink-2); padding: 2px 7px; border: 1px solid var(--line-2); border-radius: 99px; white-space: nowrap; }
 .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 1px 10px; }
-.kpi { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; font-size: 11px; padding: 2px 0; }
+.kpi { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; font-size: 12px; padding: 2.5px 0; }
 .kpi span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kpi span:first-child { color: var(--ink-2); }
-.kpi b { font-family: var(--mono); font-weight: 600; font-size: 12.5px; }
+.kpi b { font-family: var(--mono); font-weight: 600; font-size: 13.5px; }
 
 /* ───────── the unit list, which is also the selector ───────── */
 .dept {
-  width: 100%; text-align: left; background: none; border: 0; border-radius: 8px; padding: 6px 7px;
+  width: 100%; text-align: left; background: none; border: 0; border-radius: 8px; padding: 7px 9px;
   cursor: pointer; font-family: inherit; color: inherit; display: block; transition: background .14s;
 }
 .dept:hover { background: rgba(47, 111, 224, .12); }
 .dept[aria-pressed='true'] { background: rgba(47, 111, 224, .2); box-shadow: inset 0 0 0 1px rgba(47, 111, 224, .45); }
-.dept.bot { box-shadow: inset 0 0 0 1.5px var(--accent); }
+/* `hot`, not `bot`: the kit's stylesheet already owns `.bot` (its bottom panel, position: absolute, 30.5rem tall)
+   and a bottleneck row wearing that class was stretched over the whole list. */
+.dept.hot { box-shadow: inset 0 0 0 1.5px var(--accent); }
 .dr1 { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
-.dn { font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dq { font-family: var(--mono); font-size: 12px; font-weight: 600; flex-shrink: 0; }
+.dn { font-size: 13.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dq { font-family: var(--mono); font-size: 13.5px; font-weight: 600; flex-shrink: 0; }
 .bar { height: 3px; border-radius: 2px; background: var(--line); margin-top: 4px; overflow: hidden; }
 .bar i { display: block; height: 100%; border-radius: 2px; transition: width .3s, background .3s; }
-.dr2 { display: flex; justify-content: space-between; font-size: 10px; color: var(--ink-3); margin-top: 3px; font-family: var(--mono); }
-.hint { font-size: 10px; color: var(--ink-3); margin-top: 6px; line-height: 1.35; }
+.dr2 { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--ink-3); margin-top: 3px; font-family: var(--mono); }
+.hint { font-size: 10.5px; color: var(--ink-3); margin-top: 6px; line-height: 1.4; }
 
 /* ───────── button groups ───────── */
 .grp { margin-bottom: 9px; }
 .grp:last-child { margin-bottom: 0; }
-.glab { font-size: 9.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 4px; font-weight: 600; }
+.glab { font-size: 10px; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 5px; font-weight: 600; }
 .btns { display: flex; flex-wrap: wrap; gap: 4px; }
 button.b {
-  font-family: inherit; font-size: 11.5px; padding: 4px 9px; border-radius: 7px; cursor: pointer;
+  font-family: inherit; font-size: 12.5px; padding: 5px 10px; border-radius: 7px; cursor: pointer;
   border: 1px solid var(--line-2); background: transparent; color: var(--ink-2); transition: .14s; white-space: nowrap;
 }
 button.b:hover { border-color: var(--info); color: var(--ink); }
@@ -125,7 +139,7 @@ button.b.danger[aria-pressed='true'] { background: var(--accent); border-color: 
 /* ───────── sliders ───────── */
 .sl { margin-bottom: 7px; }
 .sl:last-child { margin-bottom: 0; }
-.slr { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; margin-bottom: 1px; }
+.slr { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; margin-bottom: 2px; }
 .slr span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .slr b { font-family: var(--mono); font-weight: 600; flex: none; }
 input[type=range] { width: 100%; height: 16px; -webkit-appearance: none; appearance: none; background: none; cursor: pointer; display: block; }
@@ -138,20 +152,20 @@ input[type=range]::-moz-range-track { height: 3px; border-radius: 2px; backgroun
 input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border: 2px solid var(--panel-solid); border-radius: 50%; background: var(--info); }
 
 /* ───────── the comparison table ───────── */
-.cmp { width: 100%; border-collapse: collapse; font-size: 11px; }
-.cmp th { font-size: 9px; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; text-align: right; padding: 0 0 3px; }
+.cmp { width: 100%; border-collapse: collapse; font-size: 12px; }
+.cmp th { font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; text-align: right; padding: 0 0 3px; }
 .cmp th:first-child { text-align: left; }
-.cmp td { padding: 2.5px 0; border-top: 1px solid var(--line); text-align: right; font-family: var(--mono); font-size: 11px; }
-.cmp td:first-child { text-align: left; font-family: var(--sans); color: var(--ink-2); font-size: 11px; }
+.cmp td { padding: 3.5px 0; border-top: 1px solid var(--line); text-align: right; font-family: var(--mono); font-size: 12px; }
+.cmp td:first-child { text-align: left; font-family: var(--sans); color: var(--ink-2); font-size: 12px; }
 .cmp tr.sec td {
-  border-top: 1px solid var(--line-2); color: var(--ink-3); font-size: 9.5px;
+  border-top: 1px solid var(--line-2); color: var(--ink-3); font-size: 10.5px;
   letter-spacing: .05em; text-transform: uppercase; padding-top: 6px; font-family: var(--sans);
 }
 .dlt { font-weight: 600; }
 .dlt.good { color: var(--ok); }
 .dlt.bad { color: var(--accent); }
 .dlt.same { color: var(--ink-3); }
-.cmpbtns { display: flex; gap: 4px; margin-top: 8px; flex-wrap: wrap; }
+.cmpbtns { display: flex; gap: 5px; margin-top: 9px; flex-wrap: wrap; }
 
 /* ───────── charts ───────── */
 canvas.ch { width: 100%; display: block; border-radius: 6px; }
@@ -172,9 +186,9 @@ canvas.ch { width: 100%; display: block; border-radius: 6px; }
 .tspan { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
 
 /* ───────── the patient card ───────── */
-#card { display: none; width: min(268px, 100%); max-height: 100%; overflow-y: auto; scrollbar-width: thin; }
-#card.on { display: block; }
-.pstep { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; padding: 2.5px 0; border-bottom: 1px solid var(--line); }
+#card { display: none; }
+#card.on { display: block; flex: none; }
+.pstep { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; padding: 3px 0; border-bottom: 1px solid var(--line); }
 .pstep:last-child { border: 0; }
 .pstep span:last-child { font-family: var(--mono); color: var(--ink-2); flex-shrink: 0; }
 .pstep.now { color: var(--info); font-weight: 600; }
@@ -213,18 +227,51 @@ canvas.ch { width: 100%; display: block; border-radius: 6px; }
 @keyframes sweep { from { background-position: -60% 0 } to { background-position: 160% 0 } }
 
 /* ───────── small screens ───────── */
-@media (max-width: 1180px) {
-  #charts, #rightcol { display: none; }
-  .ui { grid-template-columns: minmax(196px, 220px) 1fr; grid-template-areas: 'tl top' 'ml .' 'bl bot'; }
+/* ───────── short windows ─────────
+ *
+ * On a 768-pixel-tall laptop the left column has to fit the clock, the unit list and four groups of controls. The
+ * controls are not allowed to be cut off — that is what hid the scenario buttons before — so they get tighter
+ * instead, and the unit list keeps whatever is left. Nothing here changes what is on screen, only how much air
+ * is around it.
+ */
+@media (max-height: 880px) {
+  .col { top: 10px; bottom: 10px; gap: 9px; }
+  .col-l { left: 10px; }
+  .col-r { right: 10px; }
+  .p { padding: 9px 11px; }
+  .p h3 { margin-bottom: 6px; }
+  .time { font-size: 26px; }
+  .clockrow { margin-bottom: 7px; }
+  .kpi { padding: 1px 0; font-size: 11.5px; }
+  .grp { margin-bottom: 7px; }
+  .glab { margin-bottom: 3px; }
+  button.b { padding: 4px 8px; font-size: 12px; }
+  .btns { gap: 3px; }
+  #depts .hint { display: none; }
+  #charts canvas.ch[data-k='chU'] { height: 118px; }
+}
+@media (max-height: 760px) {
+  .col-l .kpis { grid-template-columns: 1fr 1fr 1fr; }
+  .time { font-size: 23px; }
+  button.b { padding: 3px 7px; font-size: 11.5px; }
+}
+
+@media (max-width: 1240px) {
+  .col-r { display: none; }
+  .col-l { width: 258px; }
+  #title, #bottom { max-width: calc(100% - 300px); width: min(680px, calc(100% - 300px)); }
 }
 @media (max-width: 760px) {
   .ui {
-    display: block; padding: 10px; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch;
+    padding: 10px; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch;
     background: linear-gradient(to bottom, transparent 46vh, var(--bg) 60vh);
   }
-  .ui > * { margin-bottom: 9px; width: 100%; }
-  #clock, #depts, #ctrl, #bottom, #card { position: static; max-height: none; width: 100%; }
-  #depts { margin-top: 38vh; }
-  #title { position: static; text-align: left; margin-bottom: 9px; }
+  .col, #title, #bottom {
+    position: static; width: 100%; max-width: none; transform: none; display: block; overflow: visible;
+  }
+  .col > .p, #bottom > .p { margin-bottom: 9px; }
+  .col-l { margin-top: 38vh; }
+  #depts { max-height: 46vh; }
+  #title { text-align: left; margin-bottom: 9px; }
   #tour { bottom: 12px; }
 }

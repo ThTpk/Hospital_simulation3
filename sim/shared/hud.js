@@ -50,39 +50,57 @@ export function createHud({host, cfg, handlers, sliders, floors}) {
       <div id="bot"></div>
     </div>
 
-    <div class="p" id="clock">
-      <div class="clockrow">
-        <div class="time" data-k="time">06:00</div>
-        <div class="scen" data-k="scen">วันปกติ</div>
+    <div class="col col-l">
+      <div class="p" id="clock">
+        <div class="clockrow">
+          <div class="time" data-k="time">06:00</div>
+          <div class="scen" data-k="scen">วันปกติ</div>
+        </div>
+        <div class="kpis">
+          <div class="kpi"><span>มาแล้ว</span><b data-k="kArr">0</b></div>
+          <div class="kpi"><span>กลับแล้ว</span><b data-k="kLeft">0</b></div>
+          <div class="kpi"><span>อยู่ใน รพ.</span><b data-k="kIn">0</b></div>
+          <div class="kpi"><span>รับไว้นอน</span><b data-k="kAdm">0</b></div>
+          <div class="kpi"><span>อยู่เฉลี่ย</span><b data-k="kLos">—</b></div>
+          <div class="kpi"><span>ออกกลางคัน</span><b data-k="kBalk">0</b></div>
+        </div>
       </div>
-      <div class="kpis">
-        <div class="kpi"><span>มาแล้ว</span><b data-k="kArr">0</b></div>
-        <div class="kpi"><span>กลับแล้ว</span><b data-k="kLeft">0</b></div>
-        <div class="kpi"><span>อยู่ใน รพ.</span><b data-k="kIn">0</b></div>
-        <div class="kpi"><span>รับไว้นอน</span><b data-k="kAdm">0</b></div>
-        <div class="kpi"><span>อยู่เฉลี่ย</span><b data-k="kLos">—</b></div>
-        <div class="kpi"><span>ออกกลางคัน</span><b data-k="kBalk">0</b></div>
+
+      <div class="p" id="depts">
+        <h3>หน่วยบริการ <span class="mono" data-k="fps"></span></h3>
+        <div data-k="dlist"></div>
+        <div class="hint">กดหน่วยเพื่อโฟกัส (แยกชั้นให้เอง) · กดซ้ำเพื่อยกเลิก</div>
+      </div>
+
+      <div class="p" id="ctrl">
+        <div class="grp"><div class="glab">สถานการณ์</div><div class="btns" data-k="bScen"></div></div>
+        <div class="grp"><div class="glab">ตัดผ่าอาคาร</div><div class="btns" data-k="bCut"></div>
+          <label class="secrow" data-k="secrow"><span>ระนาบตัด</span><input type="range" min="0" max="1" step="0.01" value="0.5" data-act="section"></label></div>
+        <div class="grp"><div class="glab">ชั้น</div><div class="btns" data-k="bFloor"></div></div>
+        <div class="grp"><div class="glab">มุมกล้อง</div><div class="btns" data-k="bCam"></div>
+          <div class="hint">ลาก = เลื่อน · ลากขวา/shift+ลาก = หมุน · สกรอลล์ = ซูม<br>
+            คีย์บอร์ด: <b>← →</b> หมุน · <b>↑ ↓</b> ก้ม-เงย · <b>W A S D</b> เลื่อน · <b>+ −</b> ซูม · <b>PgUp/PgDn</b> ย้ายระดับสายตา · <b>h</b> กลับภาพรวม</div></div>
       </div>
     </div>
 
-    <div class="p" id="depts">
-      <h3>หน่วยบริการ <span class="mono" data-k="fps"></span></h3>
-      <div data-k="dlist"></div>
-      <div class="hint">กดหน่วยเพื่อโฟกัส (แยกชั้นให้เอง) · กดซ้ำเพื่อยกเลิก</div>
-    </div>
+    <div class="col col-r">
+      <div class="p" id="card" data-k="card">
+        <h3>ผู้ป่วย <span data-k="pid"></span> <button class="b" data-act="pclose" style="padding:1px 7px">ปิด</button></h3>
+        <div data-k="psteps"></div>
+        <div class="hint" data-k="pnote"></div>
+      </div>
 
-    <div class="p" id="charts">
-      <h3>คิวย้อนหลัง <span data-k="chSel">ห้องตรวจแพทย์</span></h3>
-      <canvas class="ch" data-k="chQ" height="92"></canvas>
-      <div class="chl"><span>06:00</span><span data-k="chMax">0</span><span>20:00</span></div>
-      <h3 style="margin-top:11px">การใช้กำลังคนทั้งวัน</h3>
-      <canvas class="ch" data-k="chU" height="150"></canvas>
-      <h3 style="margin-top:11px">การกระจายเวลารอ <span data-k="chPct"></span></h3>
-      <canvas class="ch" data-k="chH" height="74"></canvas>
-      <div class="chl"><span>0</span><span>นาที</span><span>60+</span></div>
-    </div>
+      <div class="p" id="charts">
+        <h3>คิวย้อนหลัง <span data-k="chSel">ห้องตรวจแพทย์</span></h3>
+        <canvas class="ch" data-k="chQ" height="92"></canvas>
+        <div class="chl"><span>06:00</span><span data-k="chMax">0</span><span>20:00</span></div>
+        <h3 style="margin-top:11px">การใช้กำลังคนทั้งวัน</h3>
+        <canvas class="ch" data-k="chU" height="150"></canvas>
+        <h3 style="margin-top:11px">การกระจายเวลารอ <span data-k="chPct"></span></h3>
+        <canvas class="ch" data-k="chH" height="74"></canvas>
+        <div class="chl"><span>0</span><span>นาที</span><span>60+</span></div>
+      </div>
 
-    <div id="rightcol">
       <div class="p" id="compare">
         <h3>เทียบผลทั้งวัน <span data-k="cmpBusy" style="font-weight:400"></span></h3>
         <table class="cmp"><thead><tr><th>ตัวชี้วัด</th><th>ฐาน</th><th>ตอนนี้</th><th>ต่าง</th></tr></thead>
@@ -103,14 +121,6 @@ export function createHud({host, cfg, handlers, sliders, floors}) {
       </div>
     </div>
 
-    <div class="p" id="ctrl">
-      <div class="grp"><div class="glab">สถานการณ์</div><div class="btns" data-k="bScen"></div></div>
-      <div class="grp"><div class="glab">ตัดผ่าอาคาร</div><div class="btns" data-k="bCut"></div>
-        <label class="secrow" data-k="secrow"><span>ระนาบตัด</span><input type="range" min="0" max="1" step="0.01" value="0.5" data-act="section"></label></div>
-      <div class="grp"><div class="glab">ชั้น</div><div class="btns" data-k="bFloor"></div></div>
-      <div class="grp"><div class="glab">มุมกล้อง</div><div class="btns" data-k="bCam"></div></div>
-    </div>
-
     <div id="bottom">
       <div class="p" id="legend" data-k="legend"></div>
       <div class="p" id="timebar">
@@ -120,12 +130,6 @@ export function createHud({host, cfg, handlers, sliders, floors}) {
         <input type="range" data-act="scrub" min="${DAY_START}" max="${DAY_END}" step="1" value="${DAY_START}" aria-label="เวลา">
         <span class="tspan">20:00</span>
       </div>
-    </div>
-
-    <div class="p" id="card" data-k="card">
-      <h3>ผู้ป่วย <span data-k="pid"></span> <button class="b" data-act="pclose" style="padding:1px 7px">ปิด</button></h3>
-      <div data-k="psteps"></div>
-      <div class="hint" data-k="pnote"></div>
     </div>`;
   host.appendChild(ui);
 
@@ -376,7 +380,7 @@ export function createHud({host, cfg, handlers, sliders, floors}) {
       lastDeptKey = key;
       els.dlist.innerHTML = s.depts
         .map(
-          (d) => `<button class="dept${d.bottleneck ? ' bot' : ''}" data-act="unit" data-unit="${d.key}" aria-pressed="${d.selected}">
+          (d) => `<button class="dept${d.bottleneck ? ' hot' : ''}" data-act="unit" data-unit="${d.key}" aria-pressed="${d.selected}">
             <div class="dr1"><span class="dn">${esc(d.name)}</span><span class="dq">${d.q}</span></div>
             <div class="bar"><i style="width:${Math.min(100, d.util * 100).toFixed(0)}%;background:${d.util >= 1 ? HOS.rose : d.util >= 0.85 ? HOS.amber : HOS.blue}"></i></div>
             <div class="dr2"><span>${d.inSvc}/${d.slots} ทำงาน</span><span>รอ ${n1(d.waitMean)} น.</span></div>
