@@ -6,7 +6,7 @@
 // patient, and a scenario that quietly changes nothing still looks like a scenario.
 import {LANES, STATIONS, STATION_KEYS, runDay} from '../sim/shared/model.js';
 import {FLOOR_LIFT, PLATES, PLATE_KEYS, ROOMS, UNIT_ROOMS, checkLayout, floorLift, unitFloor, walkPath, walkTime} from '../sim/shared/layout.js';
-import {SCENARIOS, applyScenario, matchesScenario, scenarioOf, sliderSpecs, totalPerDay} from '../sim/shared/scenarios.js';
+import {SCENARIOS, TUNABLE, applyScenario, matchesScenario, scenarioOf, sliderSpecs, totalPerDay} from '../sim/shared/scenarios.js';
 import {UNIT_TH, clinicTh, insTh, laneTh, unitTh} from '../sim/shared/th.js';
 
 let fails = 0;
@@ -131,6 +131,78 @@ const fresh = () => ({seed: 20261119, servers: {}, svc: {}, dist: {}, scale: {},
   const c2 = fresh();
   vol.set(c2, 100);
   ok(Math.abs(totalPerDay(c2) - (totalPerDay(fresh()) - LANES.walkin.perDay + 100)) < 1, 'the arrivals slider changes the day total by exactly what it says');
+}
+
+// ---- 4b. the service-time sliders reach the simulation, and the clinics keep their own pace
+//
+// Two ways to shorten a queue — more rooms, or faster rooms — and the panel offers both. A slider that moved the
+// label but not the day would be invisible on screen, because a wait of 20 minutes looks much like a wait of 25.
+{
+  const specs = sliderSpecs();
+  const svc = specs.filter((sp) => sp.kind === 'svc');
+  ok(svc.length === TUNABLE.length, 'every tunable unit has a service-time slider as well as a staffing one', `${svc.length} of ${TUNABLE.length}`);
+  for (const sp of svc) {
+    ok(sp.min > 0 && sp.max > sp.get({}) && sp.min < sp.get({}), `the ${sp.sub} slider brackets its default`, `${sp.min} < ${sp.get({})} < ${sp.max}`);
+  }
+
+  const measure = (cfg, unit) => {
+    const d = runDay({seed: 20261119, walkTime, cfg});
+    let sum = 0;
+    let n = 0;
+    let clinicSum = 0;
+    let clinicN = 0;
+    for (const p2 of d.patients) {
+      for (const st of p2.steps) {
+        if (st.k !== unit || st.kind !== 'service' || !st.t1) continue;
+        sum += st.t1 - st.t0;
+        n++;
+        if (st.clinic === 'med') {
+          clinicSum += st.t1 - st.t0;
+          clinicN++;
+        }
+      }
+    }
+    return {mean: n ? sum / n : 0, med: clinicN ? clinicSum / clinicN : 0, wait: d.summary[unit].waitMean, served: d.summary[unit].served, reported: d.summary[unit].svc};
+  };
+
+  const base = measure(fresh(), 'DOC');
+  const fast = measure({...fresh(), svc: {DOC: 7}}, 'DOC');
+  const slow = measure({...fresh(), svc: {DOC: 12}}, 'DOC');
+  console.log(`ห้องตรวจแพทย์ 9 นาที: ตรวจจริงเฉลี่ย ${base.mean.toFixed(1)} น. · รอ ${base.wait.toFixed(1)} น.`);
+  console.log(`            7 นาที: ตรวจจริงเฉลี่ย ${fast.mean.toFixed(1)} น. · รอ ${fast.wait.toFixed(1)} น.`);
+  console.log(`           12 นาที: ตรวจจริงเฉลี่ย ${slow.mean.toFixed(1)} น. · รอ ${slow.wait.toFixed(1)} น.`);
+
+  ok(fast.reported === 7 && slow.reported === 12, 'the day reports back the service time it was given', `${fast.reported} / ${slow.reported}`);
+  ok(fast.mean < base.mean * 0.92, 'a shorter service time really is served shorter', `${base.mean.toFixed(2)} -> ${fast.mean.toFixed(2)} min`);
+  ok(slow.mean > base.mean * 1.15, 'and a longer one longer', `${base.mean.toFixed(2)} -> ${slow.mean.toFixed(2)} min`);
+  ok(fast.wait < base.wait, 'faster consultations cut the wait', `${base.wait.toFixed(1)} -> ${fast.wait.toFixed(1)} min`);
+  ok(slow.wait > base.wait, 'slower consultations lengthen it', `${base.wait.toFixed(1)} -> ${slow.wait.toFixed(1)} min`);
+
+  // the consultation rooms are seven clinics with seven different paces: the slider sets the unit's average and
+  // each clinic keeps its share of it, rather than all seven being flattened to one number
+  ok(
+    base.med > base.mean * 1.03,
+    'medicine takes longer than the unit average to begin with',
+    `${base.med.toFixed(2)} vs ${base.mean.toFixed(2)} min`,
+  );
+  const ratioBefore = base.med / base.mean;
+  const ratioAfter = fast.med / fast.mean;
+  ok(
+    Math.abs(ratioBefore - ratioAfter) < 0.06,
+    'and it still does after the slider moves: the clinics scale together, they do not flatten',
+    `ratio ${ratioBefore.toFixed(3)} -> ${ratioAfter.toFixed(3)}`,
+  );
+
+  // the other half of the question the two sliders exist to answer
+  const fewer = runDay({seed: 20261119, walkTime, cfg: {...fresh(), servers: {DOC: 16}}});
+  const faster = runDay({seed: 20261119, walkTime, cfg: {...fresh(), svc: {DOC: 7.5}}});
+  console.log(`เทียบกัน: ลดห้อง 19→16 รอ ${fewer.summary.DOC.waitMean.toFixed(1)} น. · ลดเวลาตรวจ 9→7.5 รอ ${faster.summary.DOC.waitMean.toFixed(1)} น.`);
+  ok(Number.isFinite(fewer.summary.DOC.waitMean) && Number.isFinite(faster.summary.DOC.waitMean), 'both levers produce a comparable day');
+
+  // a unit whose service time is NOT touched must not drift
+  const untouched = measure({...fresh(), svc: {DOC: 7}}, 'PHA');
+  const pharmBase = measure(fresh(), 'PHA');
+  ok(Math.abs(untouched.reported - pharmBase.reported) < 1e-9, 'moving one unit\'s slider does not change another unit\'s service time');
 }
 
 // ---- 5. nothing English leaks into a Thai panel

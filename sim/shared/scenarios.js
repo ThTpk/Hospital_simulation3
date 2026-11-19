@@ -102,25 +102,61 @@ export function matchesScenario(cfg, key) {
   return true;
 }
 
+/** The units whose staffing and service time can be moved while the day plays. */
+export const TUNABLE = ['REG', 'TRI', 'DOC', 'LAB', 'XRY', 'PHA', 'CSH', 'ER'];
+
+/**
+ * How long one patient takes at a unit, as a slider.
+ *
+ * This is the second half of the pair: the first slider says how many of a thing there are, this one says how fast
+ * each of them is. They are not interchangeable — six pharmacy windows at 5 minutes and five windows at 4 minutes
+ * have almost the same capacity but very different queues — and the whole point of having both is to be able to
+ * ask which one is cheaper to buy.
+ *
+ * For the consultation rooms the figure is the unit's average: `model.js` scales each clinic's own service time by
+ * the same ratio, so dragging this to 7 minutes makes Medicine 7.8 and ENT 5.4 rather than flattening them all.
+ */
+const svcSpec = (k) => {
+  const base = STATIONS[k].svc;
+  const coarse = base >= 20;
+  return {
+    kind: 'svc',
+    key: k,
+    label: 'เวลาบริการ',
+    sub: unitTh(k),
+    min: coarse ? Math.max(2, Math.round(base * 0.3)) : Math.max(0.5, Math.round(base * 0.3 * 10) / 10),
+    max: coarse ? Math.round(base * 2.2) : Math.round(base * 2.2 * 10) / 10,
+    step: coarse ? 1 : 0.1,
+    get: (cfg) => cfg.svc?.[k] ?? base,
+    set: (cfg, v) => (cfg.svc[k] = v),
+    fmt: (v) => `${coarse ? Math.round(v) : v.toFixed(1)} นาที/ราย`,
+    note: k === 'DOC' ? 'ค่าเฉลี่ยของทั้ง 7 คลินิก — แต่ละคลินิกจะถูกปรับตามสัดส่วนของตัวเอง' : null,
+  };
+};
+
 /** The sliders the ปรับสถานการณ์ panel offers: the handful of numbers worth moving while watching. */
 export function sliderSpecs() {
-  const units = ['REG', 'TRI', 'DOC', 'LAB', 'XRY', 'PHA', 'CSH', 'ER'];
   return [
-    ...units.map((k) => ({
-      kind: 'servers',
-      key: k,
-      label: unitTh(k),
-      min: 1,
-      max: Math.max(STATIONS[k].max, STATIONS[k].c),
-      step: 1,
-      get: (cfg) => cfg.servers?.[k] ?? STATIONS[k].c,
-      set: (cfg, v) => (cfg.servers[k] = v),
-      fmt: (v) => `${v} ${STATIONS[k].bed ? 'เตียง' : 'จุด'}`,
-    })),
+    ...TUNABLE.flatMap((k) => [
+      {
+        kind: 'servers',
+        key: k,
+        label: unitTh(k),
+        group: 'จุดบริการ และเวลาบริการ',
+        min: 1,
+        max: Math.max(STATIONS[k].max, STATIONS[k].c),
+        step: 1,
+        get: (cfg) => cfg.servers?.[k] ?? STATIONS[k].c,
+        set: (cfg, v) => (cfg.servers[k] = v),
+        fmt: (v) => `${v} ${STATIONS[k].bed ? 'เตียง' : 'จุด'}`,
+      },
+      svcSpec(k),
+    ]),
     {
       kind: 'lane',
       key: 'walkin',
       label: 'ผู้ป่วยเดินเข้า',
+      group: 'จำนวนผู้ป่วยที่เข้ามา',
       min: 0,
       max: 600,
       step: 10,
@@ -154,6 +190,7 @@ export function sliderSpecs() {
       kind: 'book',
       key: 'flatBooking',
       label: 'กระจายนัดทั่ววัน',
+      group: 'การนัดหมายและการส่งตรวจ',
       min: 0,
       max: 1,
       step: 0.05,

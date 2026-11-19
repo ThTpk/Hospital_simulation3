@@ -117,7 +117,8 @@ export function createHud({host, cfg, handlers, sliders, floors}) {
       <div class="p" id="tune">
         <h3>ปรับสถานการณ์</h3>
         <div data-k="slist"></div>
-        <div class="hint">เลื่อนแล้วคำนวณวันใหม่ทั้งวันทันที (~100 มิลลิวินาที) — ลองลดห้องตรวจเหลือ 14 ห้อง แล้วดูว่าคอขวดย้ายไปไหน</div>
+        <div class="hint">เลื่อนแล้วคำนวณวันใหม่ทั้งวันทันที (~100 มิลลิวินาที) · ทุกหน่วยปรับได้ทั้ง<b>จำนวนจุดบริการ</b>และ<b>เวลาบริการเฉลี่ย</b> —
+          ลองลดห้องตรวจเหลือ 14 ห้อง เทียบกับลดเวลาตรวจจาก 9 เหลือ 7 นาที แล้วดูว่าอย่างไหนช่วยได้มากกว่ากัน</div>
       </div>
     </div>
 
@@ -168,11 +169,15 @@ export function createHud({host, cfg, handlers, sliders, floors}) {
 
   // ---- the sliders
   const slEls = {};
+  let lastGroup = null;
   els.slist.innerHTML = sliders
     .map((sp, i) => {
       const v = sp.get(cfg);
-      return `<div class="sl"><div class="slr"><span>${esc(sp.label)}</span><b data-k="slv${i}">${esc(sp.fmt(v))}</b></div>
-        <input type="range" min="${sp.min}" max="${sp.max}" step="${sp.step}" value="${v}" data-act="slider" data-i="${i}"></div>`;
+      const head = sp.group && sp.group !== lastGroup ? `<div class="slgrp">${esc((lastGroup = sp.group))}</div>` : '';
+      // a service-time slider sits under the staffing slider for the same unit, so the pair reads as one block
+      return `${head}<div class="sl${sp.kind === 'svc' ? ' svcrow' : ''}"${sp.note ? ` title="${esc(sp.note)}"` : ''}>
+        <div class="slr"><span>${esc(sp.label)}</span><b data-k="slv${i}">${esc(sp.fmt(v))}</b></div>
+        <input type="range" min="${sp.min}" max="${sp.max}" step="${sp.step}" value="${v}" data-act="slider" data-i="${i}" aria-label="${esc(sp.sub ? `${sp.label} ${sp.sub}` : sp.label)}"></div>`;
     })
     .join('');
   sliders.forEach((sp, i) => {

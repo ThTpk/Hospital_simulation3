@@ -137,7 +137,19 @@ button.b.danger[aria-pressed='true'] { background: var(--accent); border-color: 
 .secrow.on { display: grid; }
 
 /* ───────── sliders ───────── */
+.slgrp {
+  font-size: 10px; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-3); font-weight: 600;
+  margin: 11px 0 5px; padding-top: 8px; border-top: 1px solid var(--line);
+}
+.slgrp:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
 .sl { margin-bottom: 7px; }
+/* The service-time slider belongs to the unit above it.
+   Named `svcrow`, not `sub`: the kit's stylesheet owns `.sub` (cream text at 64% opacity, for its own dark HUD)
+   and a row wearing that class had its value printed in cream on a white panel. The kit also owns `.bot`, `.row`,
+   `.title`, `.right`, `.side` and `.stats` as bare selectors — none of them are safe class names here. */
+.sl.svcrow { margin-left: 11px; padding-left: 8px; border-left: 2px solid var(--line); margin-bottom: 9px; }
+.sl.svcrow .slr span { color: var(--ink-3); }
+.sl.svcrow .slr b { color: var(--ink-2); }
 .sl:last-child { margin-bottom: 0; }
 .slr { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; margin-bottom: 2px; }
 .slr span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
