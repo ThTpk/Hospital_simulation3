@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "28066926-b695-496e-b5ed-92fc2892726c",
+  "status": "current",
+  "command": "deliver",
+  "type": "workflow",
+  "input": "C:\\Users\\Thanunchai\\Desktop\\Data\\Claude Code\\SmartHospital\\tools\\archify\\swimlane-er-ipd.workflow.json",
+  "output": "C:\\Users\\Thanunchai\\Desktop\\Data\\Claude Code\\SmartHospital\\web\\diagrams\\swimlane-er-ipd.html",
+  "specification": {
+    "sha256": "58bfd05883dfe1fb670c5ee41356dc4fafe9f6de744c1d00f0648dbe1c873916",
+    "bytes": 5159
+  },
+  "artifact": {
+    "sha256": "09e59b06f346c877b8b47650a8ce23f9ee643381f1ef0cca9687a48a0515612b",
+    "bytes": 826508
+  }
+}

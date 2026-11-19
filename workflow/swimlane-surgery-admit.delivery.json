@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "1469c8de-c907-4b06-a677-859b572acbde",
+  "status": "current",
+  "command": "deliver",
+  "type": "workflow",
+  "input": "C:\\Users\\Thanunchai\\Desktop\\Data\\Claude Code\\SmartHospital\\tools\\archify\\swimlane-surgery-admit.workflow.json",
+  "output": "C:\\Users\\Thanunchai\\Desktop\\Data\\Claude Code\\SmartHospital\\web\\diagrams\\swimlane-surgery-admit.html",
+  "specification": {
+    "sha256": "55b1c77ae940619bc6a16b9c9c73223d27357a1cc00f32a85769ce785db57a05",
+    "bytes": 5234
+  },
+  "artifact": {
+    "sha256": "541bf8f2a017012bdfd982826af8b6b4e38548830b75a9bfd5194565f253665d",
+    "bytes": 825591
+  }
+}

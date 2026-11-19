@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "hospital",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["serve.py", "8767"],
+      "port": 8767
+    }
+  ]
+}
